@@ -1,0 +1,542 @@
+// Aggregation logic: turns raw ADO work items + revision history into the
+// metrics the dashboard needs. Hours are reconstructed from native
+// Completed/Remaining Work fields via each Task's revision history.
+
+import {
+  getIterations,
+  getTeamSettings,
+  getTeamFieldValues,
+  getCapacities,
+  getTeamDaysOff,
+  wiql,
+  getWorkItemsBatch,
+  getRevisions,
+} from './adoClient.js';
+
+const F = {
+  type: 'System.WorkItemType',
+  state: 'System.State',
+  title: 'System.Title',
+  assignedTo: 'System.AssignedTo',
+  iterationPath: 'System.IterationPath',
+  parent: 'System.Parent',
+  completed: 'Microsoft.VSTS.Scheduling.CompletedWork',
+  remaining: 'Microsoft.VSTS.Scheduling.RemainingWork',
+  storyPoints: 'Microsoft.VSTS.Scheduling.StoryPoints',
+  targetDate: 'Microsoft.VSTS.Scheduling.TargetDate',
+  changedDate: 'System.ChangedDate',
+  stackRank: 'Microsoft.VSTS.Common.StackRank',
+  backlogPriority: 'Microsoft.VSTS.Common.BacklogPriority',
+  priority: 'Microsoft.VSTS.Common.Priority',
+};
+
+const COMPLETED_STATES = new Set(['done', 'closed', 'completed', 'resolved']);
+const REMOVED_STATES = new Set(['removed', 'cut']);
+const STORY_TYPES = new Set(['user story', 'product backlog item', 'requirement']);
+
+// --- helpers -------------------------------------------------------------
+
+const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
+function dateKey(d) {
+  return new Date(d).toISOString().slice(0, 10);
+}
+
+function personName(assignedTo) {
+  if (!assignedTo) return 'Unassigned';
+  if (typeof assignedTo === 'string') return assignedTo.split('<')[0].trim() || 'Unassigned';
+  return assignedTo.displayName || 'Unassigned';
+}
+
+function num(v) {
+  if (typeof v === 'number') return Number.isNaN(v) ? 0 : v;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v);
+    return Number.isNaN(n) ? 0 : n;
+  }
+  return 0;
+}
+
+function enumerateDays(start, finish) {
+  const days = [];
+  const d = new Date(dateKey(start) + 'T00:00:00.000Z');
+  const end = new Date(dateKey(finish) + 'T00:00:00.000Z');
+  while (d <= end) {
+    days.push(dateKey(d));
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return days;
+}
+
+function inRanges(key, ranges) {
+  return ranges.some((r) => key >= dateKey(r.start) && key <= dateKey(r.end));
+}
+
+const esc = (s) => String(s).replace(/'/g, "''");
+
+// Build a WIQL predicate that limits a query to a team's configured area paths.
+// `field` is the prefix for the field, e.g. '[System.AreaPath]' or
+// '[Source].[System.AreaPath]' for WorkItemLinks queries.
+function areaPathClause(teamField, fieldExpr) {
+  const values = teamField?.values || [];
+  if (!values.length) return null;
+  const parts = values.map((v) => {
+    const op = v.includeChildren ? 'UNDER' : '=';
+    return `${fieldExpr} ${op} '${esc(v.value)}'`;
+  });
+  return `(${parts.join(' OR ')})`;
+}
+
+async function pool(items, limit, fn) {
+  const results = new Array(items.length);
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) {
+      const idx = i++;
+      results[idx] = await fn(items[idx], idx);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+// Build a per-task chronological revision summary of the fields we track.
+function summarizeRevisions(revisions) {
+  const points = [];
+  for (const rev of revisions) {
+    const f = rev.fields || {};
+    points.push({
+      date: f[F.changedDate] || rev.rev,
+      completed: num(f[F.completed]),
+      remaining: num(f[F.remaining]),
+      assignee: personName(f[F.assignedTo]),
+    });
+  }
+  points.sort((a, b) => new Date(a.date) - new Date(b.date));
+  return points;
+}
+
+function valueAsOf(points, dayKey, field, fallback) {
+  let val = fallback;
+  for (const p of points) {
+    if (dateKey(p.date) <= dayKey) val = p[field];
+    else break;
+  }
+  return val;
+}
+
+function existsAsOf(points, dayKey) {
+  return points.length > 0 && dateKey(points[0].date) <= dayKey;
+}
+
+// --- main dashboard ------------------------------------------------------
+
+export async function buildDashboard(team, iterationId) {
+  const iterations = await getIterations(team);
+  const iteration = iterations.find((it) => it.id === iterationId) || iterations[0];
+  if (!iteration) throw new Error('No iterations found for this team.');
+  if (!iteration.startDate || !iteration.finishDate) {
+    throw new Error(`Iteration "${iteration.name}" has no start/finish dates set in ADO.`);
+  }
+
+  const [settings, capacities, teamDaysOff, teamField] = await Promise.all([
+    getTeamSettings(team),
+    getCapacities(team, iteration.id),
+    getTeamDaysOff(team, iteration.id),
+    getTeamFieldValues(team),
+  ]);
+
+  const workingDayNames = new Set((settings.workingDays || []).map((w) => w.toLowerCase()));
+  if (workingDayNames.size === 0) ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'].forEach((d) => workingDayNames.add(d));
+
+  // People + capacity map keyed by display name.
+  const people = new Map();
+  for (const c of capacities) {
+    const name = personName(c.teamMember);
+    const perDay = (c.activities || []).reduce((s, a) => s + num(a.capacityPerDay), 0);
+    people.set(name, { name, capacityPerDay: perDay, daysOff: c.daysOff || [] });
+  }
+
+  const capacityDiag = {
+    membersReturned: capacities.length,
+    withCapacity: Array.from(people.values()).filter((p) => p.capacityPerDay > 0).length,
+    names: capacities.map((c) => personName(c.teamMember)),
+    iterationName: iteration.name,
+    teamName: team,
+  };
+
+  const allDays = enumerateDays(iteration.startDate, iteration.finishDate);
+  const isWorking = (key) => {
+    const weekday = WEEKDAYS[new Date(key + 'T00:00:00.000Z').getUTCDay()];
+    return workingDayNames.has(weekday) && !inRanges(key, teamDaysOff);
+  };
+  const workingDays = allDays.filter(isWorking);
+
+  // Tasks in the selected iteration, scoped to the team's area path(s).
+  const taskArea = areaPathClause(teamField, '[System.AreaPath]');
+  const taskQuery =
+    `SELECT [System.Id] FROM WorkItems WHERE [System.WorkItemType] = 'Task' ` +
+    `AND [System.IterationPath] UNDER '${esc(iteration.path)}'` +
+    (taskArea ? ` AND ${taskArea}` : '');
+  const taskRes = await wiql(taskQuery);
+  const taskIds = (taskRes.workItems || []).map((w) => w.id);
+
+  const revisionsByTask = await pool(taskIds, 6, async (id) => ({ id, points: summarizeRevisions(await getRevisions(id)) }));
+
+  // Ensure every assignee that logged work appears as a person row.
+  for (const t of revisionsByTask) {
+    for (const p of t.points) {
+      if (!people.has(p.assignee)) people.set(p.assignee, { name: p.assignee, capacityPerDay: 0, daysOff: [] });
+    }
+  }
+
+  const today = dateKey(new Date());
+  const asOfDay = [...workingDays].reverse().find((d) => d <= today) || null;
+  const sprintStart = workingDays[0] || dateKey(iteration.startDate);
+
+  // --- Daily hours per person (completed-work deltas attributed to assignee) ---
+  // dailyWorked[dayKey][person] = hours logged that day.
+  // dailyBurned[dayKey][person] = remaining-work reduction that day (burndown).
+  const dailyWorked = {};
+  const dailyBurned = {};
+  const dailyScopeAdded = {};
+  const personTaskTouches = {};
+  for (const t of revisionsByTask) {
+    let prevCompleted = 0;
+    let prevRemaining = null;
+    for (const p of t.points) {
+      if (asOfDay && dateKey(p.date) <= asOfDay) {
+        if (!personTaskTouches[p.assignee]) personTaskTouches[p.assignee] = new Set();
+        personTaskTouches[p.assignee].add(t.id);
+      }
+
+      const wDelta = p.completed - prevCompleted;
+      prevCompleted = p.completed;
+      if (wDelta !== 0) {
+        const key = dateKey(p.date);
+        (dailyWorked[key] ||= {});
+        dailyWorked[key][p.assignee] = num(dailyWorked[key][p.assignee]) + wDelta;
+      }
+
+      // Burned = decrease in Remaining Work (increases don't count as burn).
+      if (prevRemaining !== null) {
+        const burn = prevRemaining - p.remaining;
+        if (burn > 0) {
+          const key = dateKey(p.date);
+          (dailyBurned[key] ||= {});
+          dailyBurned[key][p.assignee] = num(dailyBurned[key][p.assignee]) + burn;
+        }
+        const add = p.remaining - prevRemaining;
+        if (add > 0) {
+          const key = dateKey(p.date);
+          (dailyScopeAdded[key] ||= 0);
+          dailyScopeAdded[key] += add;
+        }
+      }
+      prevRemaining = p.remaining;
+    }
+  }
+
+  const personList = Array.from(people.values()).sort((a, b) => a.name.localeCompare(b.name));
+
+  const dailyHours = {
+    days: workingDays,
+    people: personList.map((person) => {
+      const cells = workingDays.map((day) => {
+        const worked = num(dailyWorked[day]?.[person.name]);
+        const burned = num(dailyBurned[day]?.[person.name]);
+        const off = inRanges(day, person.daysOff) || inRanges(day, teamDaysOff);
+        const capacity = off ? 0 : person.capacityPerDay;
+        return { day, worked: round(worked), burned: round(burned), capacity: round(capacity), off };
+      });
+      return {
+        name: person.name,
+        capacityPerDay: person.capacityPerDay,
+        cells,
+        totalWorked: round(cells.reduce((s, c) => s + c.worked, 0)),
+        totalBurned: round(cells.reduce((s, c) => s + c.burned, 0)),
+        totalCapacity: round(cells.reduce((s, c) => s + c.capacity, 0)),
+      };
+    }),
+  };
+
+  // --- Burndown series (per working day) ---
+  const teamBurndown = [];
+  const personRemaining = {}; // person -> [{day, hours}]
+  const personCompleted = {}; // person -> cumulative
+  const names = personList.map((p) => p.name);
+  names.forEach((n) => {
+    personRemaining[n] = [];
+    personCompleted[n] = [];
+  });
+
+  // Cumulative completed per person up to and including each day.
+  const cumCompleted = Object.fromEntries(names.map((n) => [n, 0]));
+  const asOfPersonRemaining = Object.fromEntries(names.map((n) => [n, 0]));
+  const asOfPersonCompleted = Object.fromEntries(names.map((n) => [n, 0]));
+  let asOfTeamRemaining = 0;
+
+  for (const day of workingDays) {
+    const isFuture = day > today;
+    let teamRemaining = 0;
+    const perPersonRemaining = Object.fromEntries(names.map((n) => [n, 0]));
+
+    for (const t of revisionsByTask) {
+      if (!existsAsOf(t.points, day)) continue;
+      const remaining = num(valueAsOf(t.points, day, 'remaining', 0));
+      const assignee = valueAsOf(t.points, day, 'assignee', 'Unassigned');
+      teamRemaining += remaining;
+      if (perPersonRemaining[assignee] === undefined) perPersonRemaining[assignee] = 0;
+      perPersonRemaining[assignee] += remaining;
+    }
+
+    // add the day's completed deltas to cumulative
+    const worked = dailyWorked[day] || {};
+    for (const [name, hrs] of Object.entries(worked)) {
+      if (cumCompleted[name] === undefined) cumCompleted[name] = 0;
+      cumCompleted[name] += hrs;
+    }
+
+    // Actual lines stop after today: future days are null so the line ends,
+    // while the ideal line and x-axis still span the full sprint.
+    teamBurndown.push({ day, remaining: isFuture ? null : round(teamRemaining) });
+    for (const n of names) {
+      personRemaining[n].push({ day, hours: isFuture ? null : round(perPersonRemaining[n] || 0) });
+      personCompleted[n].push({ day, hours: isFuture ? null : round(cumCompleted[n] || 0) });
+    }
+
+    if (asOfDay && day === asOfDay) {
+      asOfTeamRemaining = round(teamRemaining);
+      for (const n of names) {
+        asOfPersonRemaining[n] = round(perPersonRemaining[n] || 0);
+        asOfPersonCompleted[n] = round(cumCompleted[n] || 0);
+      }
+    }
+  }
+
+  // Ideal line for the team burndown.
+  const startRemaining = teamBurndown.length ? teamBurndown[0].remaining : 0;
+  const ideal = teamBurndown.map((pt, i) => ({
+    day: pt.day,
+    ideal: round(startRemaining * (1 - i / Math.max(1, teamBurndown.length - 1))),
+  }));
+
+  const elapsedWorkingDays = workingDays.filter((d) => d <= today).length;
+  const remainingWorkingDays = workingDays.filter((d) => d > today).length;
+  const dailyPeople = dailyHours.people;
+
+  const personMetrics = dailyPeople
+    .map((p) => {
+      const cellsToDate = p.cells.filter((c) => c.day <= today);
+      const workedToDate = round(cellsToDate.reduce((s, c) => s + c.worked, 0));
+      const burnedToDate = round(cellsToDate.reduce((s, c) => s + c.burned, 0));
+      const capacityToDate = round(cellsToDate.reduce((s, c) => s + c.capacity, 0));
+      const workedDays = cellsToDate.filter((c) => c.worked > 0).length;
+      const burnedDays = cellsToDate.filter((c) => c.burned > 0).length;
+      const utilizationPct = pct(workedToDate, capacityToDate);
+      const burnEfficiencyPct = pct(burnedToDate, workedToDate);
+      const remainingToday = asOfDay ? round(asOfPersonRemaining[p.name] || 0) : 0;
+      const completedToDate = asOfDay ? round(asOfPersonCompleted[p.name] || 0) : 0;
+      const tasksTouched = (personTaskTouches[p.name] && personTaskTouches[p.name].size) || 0;
+      const avgWorkedPerDay = elapsedWorkingDays > 0 ? round(workedToDate / elapsedWorkingDays) : 0;
+      const avgBurnedPerDay = elapsedWorkingDays > 0 ? round(burnedToDate / elapsedWorkingDays) : 0;
+      const overUnderToDate = round(workedToDate - capacityToDate);
+
+      return {
+        name: p.name,
+        capacityPerDay: round(p.capacityPerDay),
+        workedToDate,
+        burnedToDate,
+        completedToDate,
+        remainingToday,
+        capacityToDate,
+        utilizationPct,
+        burnEfficiencyPct,
+        workedDays,
+        burnedDays,
+        avgWorkedPerDay,
+        avgBurnedPerDay,
+        overUnderToDate,
+        tasksTouched,
+      };
+    })
+    .filter((p) => p.capacityPerDay > 0 || p.workedToDate > 0 || p.burnedToDate > 0 || p.remainingToday > 0)
+    .sort((a, b) => {
+      if (b.burnedToDate !== a.burnedToDate) return b.burnedToDate - a.burnedToDate;
+      return a.name.localeCompare(b.name);
+    });
+
+  const teamWorkedToDate = round(personMetrics.reduce((s, p) => s + p.workedToDate, 0));
+  const teamBurnedToDate = round(personMetrics.reduce((s, p) => s + p.burnedToDate, 0));
+  const teamCapacityToDate = round(personMetrics.reduce((s, p) => s + p.capacityToDate, 0));
+  const contributorsActive = personMetrics.filter((p) => p.workedToDate > 0 || p.burnedToDate > 0).length;
+  const tasksTouchedCount = Object.values(personTaskTouches).reduce((s, set) => s + set.size, 0);
+  const scopeAddedToDate = round(
+    Object.entries(dailyScopeAdded)
+      .filter(([day]) => day >= sprintStart && day <= today)
+      .reduce((s, [, hrs]) => s + num(hrs), 0),
+  );
+
+  const teamMetrics = {
+    elapsedWorkingDays,
+    totalWorkingDays: workingDays.length,
+    remainingWorkingDays,
+    contributorsActive,
+    taskCount: taskIds.length,
+    tasksTouchedCount,
+    workedToDate: teamWorkedToDate,
+    burnedToDate: teamBurnedToDate,
+    remainingToday: asOfDay ? asOfTeamRemaining : null,
+    capacityToDate: teamCapacityToDate,
+    utilizationPct: pct(teamWorkedToDate, teamCapacityToDate),
+    burnEfficiencyPct: pct(teamBurnedToDate, teamWorkedToDate),
+    scopeAddedToDate,
+    generatedThrough: asOfDay,
+  };
+
+  return {
+    iteration,
+    workingDays,
+    dailyHours,
+    capacityDiag,
+    teamMetrics,
+    personMetrics,
+    burndown: {
+      team: teamBurndown.map((pt, i) => ({ ...pt, ideal: ideal[i].ideal })),
+      people: names.map((n) => ({
+        name: n,
+        capacityPerDay: people.get(n)?.capacityPerDay || 0,
+        remaining: personRemaining[n],
+        completed: personCompleted[n],
+      })),
+    },
+    taskCount: taskIds.length,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+// --- feature status ------------------------------------------------------
+
+export async function buildFeatures(team, iterationId) {
+  const [iterations, teamField] = await Promise.all([getIterations(team), getTeamFieldValues(team)]);
+  const iteration = iterations.find((it) => it.id === iterationId) || null;
+  const iterationPath = iteration?.path || null;
+
+  // Recursive hierarchy from Features downward, scoped to the team's area
+  // path(s) so we never scan the whole (20k+ item) project.
+  const sourceArea = areaPathClause(teamField, '[Source].[System.AreaPath]');
+  const linkQuery =
+    `SELECT [System.Id] FROM WorkItemLinks WHERE ([Source].[System.WorkItemType] = 'Feature') ` +
+    (sourceArea ? `AND (${sourceArea}) ` : '') +
+    `AND ([System.Links.LinkType] = 'System.LinkTypes.Hierarchy-Forward') MODE (Recursive)`;
+  const linkRes = await wiql(linkQuery);
+  const rels = linkRes.workItemRelations || [];
+
+  const childrenOf = new Map();
+  const ids = new Set();
+  const featureIds = new Set();
+  for (const rel of rels) {
+    if (rel.target) ids.add(rel.target.id);
+    if (rel.source) ids.add(rel.source.id);
+    if (!rel.source && rel.target) featureIds.add(rel.target.id); // root = Feature
+    if (rel.source && rel.target) {
+      if (!childrenOf.has(rel.source.id)) childrenOf.set(rel.source.id, []);
+      childrenOf.get(rel.source.id).push(rel.target.id);
+    }
+  }
+
+  const items = await getWorkItemsBatch(Array.from(ids), [
+    F.type, F.state, F.title, F.storyPoints, F.completed, F.remaining, F.targetDate, F.iterationPath,
+    F.stackRank, F.backlogPriority, F.priority,
+  ]);
+  const byId = new Map(items.map((w) => [w.id, w.fields || {}]));
+
+  // Any Feature returned by the query (including ones with no children).
+  for (const w of items) {
+    if ((w.fields?.[F.type] || '').toLowerCase() === 'feature') featureIds.add(w.id);
+  }
+
+  function descend(id, acc) {
+    for (const child of childrenOf.get(id) || []) {
+      acc.push(child);
+      descend(child, acc);
+    }
+    return acc;
+  }
+
+  const features = [];
+  for (const fid of featureIds) {
+    const f = byId.get(fid);
+    if (!f) continue;
+    if (REMOVED_STATES.has((f[F.state] || '').toLowerCase())) continue;
+
+    const descendants = descend(fid, []).map((id) => byId.get(id)).filter(Boolean);
+
+    let pointsTotal = 0;
+    let pointsDone = 0;
+    let hoursRemaining = 0;
+    let hoursComplete = 0;
+    let inIteration = false;
+
+    for (const d of descendants) {
+      const type = (d[F.type] || '').toLowerCase();
+      const state = (d[F.state] || '').toLowerCase();
+      if (iterationPath && (d[F.iterationPath] || '').startsWith(iterationPath)) inIteration = true;
+
+      if (type === 'task') {
+        hoursRemaining += num(d[F.remaining]);
+        hoursComplete += num(d[F.completed]);
+      }
+      const isStory = STORY_TYPES.has(type) || (d[F.storyPoints] != null && type !== 'feature' && type !== 'epic' && type !== 'task');
+      if (isStory) {
+        const pts = num(d[F.storyPoints]);
+        pointsTotal += pts;
+        if (COMPLETED_STATES.has(state)) pointsDone += pts;
+      }
+    }
+
+    const rank = f[F.stackRank] != null ? num(f[F.stackRank])
+      : f[F.backlogPriority] != null ? num(f[F.backlogPriority])
+      : null;
+
+    features.push({
+      id: fid,
+      title: f[F.title] || `Feature ${fid}`,
+      state: f[F.state] || '',
+      targetDate: f[F.targetDate] || null,
+      storyPointsTotal: round(pointsTotal),
+      storyPointsDone: round(pointsDone),
+      percentComplete: pointsTotal > 0 ? Math.round((pointsDone / pointsTotal) * 100) : 0,
+      hoursRemaining: round(hoursRemaining),
+      hoursComplete: round(hoursComplete),
+      rank,
+      priority: f[F.priority] != null ? num(f[F.priority]) : null,
+      inIteration,
+    });
+  }
+
+  // Backlog priority order: lower Stack Rank = higher priority. Items without a
+  // rank fall to the bottom, tie-broken by title.
+  features.sort((a, b) => {
+    const ar = a.rank == null ? Infinity : a.rank;
+    const br = b.rank == null ? Infinity : b.rank;
+    if (ar !== br) return ar - br;
+    return a.title.localeCompare(b.title);
+  });
+  features.forEach((f, i) => { f.priorityOrder = i + 1; });
+
+  return {
+    iterationPath,
+    iterationFeatures: features.filter((f) => f.inIteration),
+    backlogFeatures: features,
+  };
+}
+
+function round(n) {
+  return Math.round(num(n) * 100) / 100;
+}
+
+function pct(part, whole) {
+  if (!whole || whole <= 0) return null;
+  return Math.round((num(part) / num(whole)) * 100);
+}
