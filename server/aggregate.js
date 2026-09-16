@@ -180,6 +180,8 @@ export async function buildDashboard(team, iterationId) {
     (taskArea ? ` AND ${taskArea}` : '');
   const taskRes = await wiql(taskQuery);
   const taskIds = (taskRes.workItems || []).map((w) => w.id);
+  const taskItems = taskIds.length ? await getWorkItemsBatch(taskIds, [F.title]) : [];
+  const taskTitleById = new Map(taskItems.map((w) => [w.id, w.fields?.[F.title] || `Task ${w.id}`]));
 
   const revisionsByTask = await pool(taskIds, 6, async (id) => ({ id, points: summarizeRevisions(await getRevisions(id)) }));
 
@@ -201,6 +203,27 @@ export async function buildDashboard(team, iterationId) {
   const dailyBurned = {};
   const dailyScopeAdded = {};
   const personTaskTouches = {};
+  const personDayTaskActivity = {};
+
+  function addTaskActivity(person, day, taskId, worked, burned) {
+    if (!personDayTaskActivity[person]) personDayTaskActivity[person] = {};
+    if (!personDayTaskActivity[person][day]) personDayTaskActivity[person][day] = {};
+    if (!personDayTaskActivity[person][day][taskId]) {
+      personDayTaskActivity[person][day][taskId] = {
+        id: taskId,
+        title: taskTitleById.get(taskId) || `Task ${taskId}`,
+        worked: 0,
+        burned: 0,
+      };
+    }
+    personDayTaskActivity[person][day][taskId].worked = round(
+      personDayTaskActivity[person][day][taskId].worked + num(worked),
+    );
+    personDayTaskActivity[person][day][taskId].burned = round(
+      personDayTaskActivity[person][day][taskId].burned + num(burned),
+    );
+  }
+
   for (const t of revisionsByTask) {
     let prevCompleted = 0;
     let prevRemaining = null;
@@ -216,6 +239,7 @@ export async function buildDashboard(team, iterationId) {
         const key = dateKey(p.date);
         (dailyWorked[key] ||= {});
         dailyWorked[key][p.assignee] = num(dailyWorked[key][p.assignee]) + wDelta;
+        if (wDelta > 0) addTaskActivity(p.assignee, key, t.id, wDelta, 0);
       }
 
       // Burned = decrease in Remaining Work (increases don't count as burn).
@@ -225,6 +249,7 @@ export async function buildDashboard(team, iterationId) {
           const key = dateKey(p.date);
           (dailyBurned[key] ||= {});
           dailyBurned[key][p.assignee] = num(dailyBurned[key][p.assignee]) + burn;
+          addTaskActivity(p.assignee, key, t.id, 0, burn);
         }
         const add = p.remaining - prevRemaining;
         if (add > 0) {
@@ -401,6 +426,19 @@ export async function buildDashboard(team, iterationId) {
     capacityDiag,
     teamMetrics,
     personMetrics,
+    personDayTaskActivity: Object.fromEntries(
+      Object.entries(personDayTaskActivity).map(([person, days]) => ([
+        person,
+        Object.fromEntries(
+          Object.entries(days).map(([day, items]) => ([
+            day,
+            Object.values(items)
+              .filter((it) => it.worked > 0 || it.burned > 0)
+              .sort((a, b) => (b.worked + b.burned) - (a.worked + a.burned)),
+          ])),
+        ),
+      ])),
+    ),
     burndown: {
       team: teamBurndown.map((pt, i) => ({ ...pt, ideal: ideal[i].ideal })),
       people: names.map((n) => ({

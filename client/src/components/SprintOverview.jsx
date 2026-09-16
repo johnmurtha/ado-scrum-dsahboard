@@ -1,4 +1,4 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   ResponsiveContainer,
   LineChart,
@@ -33,11 +33,77 @@ function isUnassigned(name) {
   return String(name || '').trim().toLowerCase() === 'unassigned';
 }
 
+function PersonSprintCard({ person }) {
+  const [hoverIndex, setHoverIndex] = useState(null);
+  const hovered = hoverIndex == null ? null : person.series[hoverIndex] || null;
+  const taskRows = hovered?.tasks || [];
+
+  return (
+    <div className="person-card">
+      <div className="person-card-head">
+        <h4>{person.name}</h4>
+        <span className="pill">{pct(person.metrics.burnEfficiencyPct)} burn eff</span>
+      </div>
+
+      <div className="person-mini-metrics">
+        <div><span className="muted">Cap/day</span><strong>{fmt(person.metrics.capacityPerDay)}</strong></div>
+        <div><span className="muted">Worked</span><strong>{fmt(person.metrics.workedToDate)}h</strong></div>
+        <div><span className="muted">Burned</span><strong>{fmt(person.metrics.burnedToDate)}h</strong></div>
+        <div><span className="muted">Remaining</span><strong>{person.metrics.remainingToday == null ? '—' : `${fmt(person.metrics.remainingToday)}h`}</strong></div>
+        <div><span className="muted">Completed</span><strong>{fmt(person.metrics.completedToDate)}h</strong></div>
+        <div><span className="muted">Avg worked/day</span><strong>{fmt(person.metrics.avgWorkedPerDay)}h</strong></div>
+        <div><span className="muted">Avg burned/day</span><strong>{fmt(person.metrics.avgBurnedPerDay)}h</strong></div>
+      </div>
+
+      <div className="person-chart">
+        <ResponsiveContainer width="100%" height={220}>
+          <ComposedChart
+            data={person.series}
+            margin={{ top: 5, right: 10, bottom: 0, left: 0 }}
+            onMouseMove={(state) => {
+              if (state?.isTooltipActive && typeof state.activeTooltipIndex === 'number') {
+                setHoverIndex(state.activeTooltipIndex);
+              }
+            }}
+            onMouseLeave={() => setHoverIndex(null)}
+          >
+            <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
+            <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 11 }} />
+            <Tooltip />
+            <Legend />
+            <Bar dataKey="worked" name="Worked/day" fill="#93c5fd" />
+            <Bar dataKey="burned" name="Burned/day" fill="#fdba74" />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="person-hover-tasks">
+        <div className="person-hover-title">
+          Day details {hovered ? `(${hovered.label})` : ''}
+        </div>
+        {!hovered && <div className="muted">Hover a chart day to see which tasks were worked/burned.</div>}
+        {hovered && !taskRows.length && <div className="muted">No worked/burned task changes on this day.</div>}
+        {hovered && taskRows.length > 0 && (
+          <ul className="task-activity-list">
+            {taskRows.map((t) => (
+              <li key={`${t.id}-${hovered.day}`}>
+                <span className="task-activity-name">#{t.id} {t.title}</span>
+                <span className="task-activity-hours">W {fmt(t.worked)}h · B {fmt(t.burned)}h</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function SprintOverview({ dashboard }) {
   const teamChartRef = useRef(null);
   if (!dashboard) return null;
 
-  const { teamMetrics, personMetrics = [], burndown, dailyHours } = dashboard;
+  const { teamMetrics, personMetrics = [], burndown, dailyHours, personDayTaskActivity } = dashboard;
   const teamLineData = useMemo(() => {
     const base = burndown?.team || [];
     const dayCapacity = (dashboard.workingDays || []).map((_, i) =>
@@ -64,10 +130,9 @@ export default function SprintOverview({ dashboard }) {
         const series = (dashboard.workingDays || []).map((day, i) => ({
           day,
           label: shortDay(day),
-          remaining: p.remaining?.[i]?.hours ?? null,
-          completed: p.completed?.[i]?.hours ?? null,
           worked: daily?.cells?.[i]?.worked ?? 0,
           burned: daily?.cells?.[i]?.burned ?? 0,
+          tasks: personDayTaskActivity?.[p.name]?.[day] || [],
         }));
         return { name: p.name, metrics, series };
       })
@@ -76,7 +141,7 @@ export default function SprintOverview({ dashboard }) {
         if (b.metrics.burnedToDate !== a.metrics.burnedToDate) return b.metrics.burnedToDate - a.metrics.burnedToDate;
         return a.name.localeCompare(b.name);
       });
-  }, [dashboard.workingDays, burndown?.people, dailyHours?.people, personMetrics]);
+  }, [dashboard.workingDays, burndown?.people, dailyHours?.people, personMetrics, personDayTaskActivity]);
 
   function exportTeamCsv() {
     const rows = [
@@ -142,39 +207,7 @@ export default function SprintOverview({ dashboard }) {
         </div>
         <div className="person-card-grid">
           {peopleCards.map((p) => (
-            <div className="person-card" key={p.name}>
-              <div className="person-card-head">
-                <h4>{p.name}</h4>
-                <span className="pill">{pct(p.metrics.burnEfficiencyPct)} burn eff</span>
-              </div>
-
-              <div className="person-mini-metrics">
-                <div><span className="muted">Cap/day</span><strong>{fmt(p.metrics.capacityPerDay)}</strong></div>
-                <div><span className="muted">Worked</span><strong>{fmt(p.metrics.workedToDate)}h</strong></div>
-                <div><span className="muted">Burned</span><strong>{fmt(p.metrics.burnedToDate)}h</strong></div>
-                <div><span className="muted">Remaining</span><strong>{p.metrics.remainingToday == null ? '—' : `${fmt(p.metrics.remainingToday)}h`}</strong></div>
-                <div><span className="muted">Completed</span><strong>{fmt(p.metrics.completedToDate)}h</strong></div>
-                <div><span className="muted">Avg worked/day</span><strong>{fmt(p.metrics.avgWorkedPerDay)}h</strong></div>
-                <div><span className="muted">Avg burned/day</span><strong>{fmt(p.metrics.avgBurnedPerDay)}h</strong></div>
-              </div>
-
-              <div className="person-chart">
-                <ResponsiveContainer width="100%" height={220}>
-                  <ComposedChart data={p.series} margin={{ top: 5, right: 10, bottom: 0, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
-                    <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                    <YAxis yAxisId="left" tick={{ fontSize: 11 }} />
-                    <YAxis yAxisId="right" orientation="right" tick={{ fontSize: 11 }} />
-                    <Tooltip />
-                    <Legend />
-                    <Bar yAxisId="right" dataKey="worked" name="Worked/day" fill="#93c5fd" />
-                    <Bar yAxisId="right" dataKey="burned" name="Burned/day" fill="#fdba74" />
-                    <Line yAxisId="left" type="monotone" dataKey="remaining" name="Remaining" stroke="#2563eb" strokeWidth={2} dot={false} />
-                    <Line yAxisId="left" type="monotone" dataKey="completed" name="Completed" stroke="#16a34a" strokeWidth={2} dot={false} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
+            <PersonSprintCard key={p.name} person={p} />
           ))}
           {!peopleCards.length && (
             <div className="muted">No person sprint metrics available for this team/iteration yet.</div>
