@@ -304,6 +304,7 @@ export async function buildDashboard(team, iterationId) {
   for (const day of workingDays) {
     const isFuture = day > today;
     let teamRemaining = 0;
+    let unassignedRemaining = 0;
     const perPersonRemaining = Object.fromEntries(names.map((n) => [n, 0]));
 
     for (const t of revisionsByTask) {
@@ -311,6 +312,7 @@ export async function buildDashboard(team, iterationId) {
       const remaining = num(valueAsOf(t.points, day, 'remaining', 0));
       const assignee = valueAsOf(t.points, day, 'assignee', 'Unassigned');
       teamRemaining += remaining;
+      if (assignee === 'Unassigned') unassignedRemaining += remaining;
       if (perPersonRemaining[assignee] === undefined) perPersonRemaining[assignee] = 0;
       perPersonRemaining[assignee] += remaining;
     }
@@ -324,7 +326,11 @@ export async function buildDashboard(team, iterationId) {
 
     // Actual lines stop after today: future days are null so the line ends,
     // while the ideal line and x-axis still span the full sprint.
-    teamBurndown.push({ day, remaining: isFuture ? null : round(teamRemaining) });
+    teamBurndown.push({
+      day,
+      remaining: isFuture ? null : round(teamRemaining),
+      unassigned: isFuture ? null : round(unassignedRemaining),
+    });
     for (const n of names) {
       personRemaining[n].push({ day, hours: isFuture ? null : round(perPersonRemaining[n] || 0) });
       personCompleted[n].push({ day, hours: isFuture ? null : round(cumCompleted[n] || 0) });

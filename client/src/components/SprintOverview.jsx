@@ -1,8 +1,8 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
   ResponsiveContainer,
-  LineChart,
   Line,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -145,8 +145,8 @@ export default function SprintOverview({ dashboard }) {
 
   function exportTeamCsv() {
     const rows = [
-      ['Day', 'Remaining', 'Ideal', 'Available capacity'],
-      ...teamLineData.map((d) => [d.day, d.remaining, d.ideal, d.availableCapacity]),
+      ['Day', 'Remaining', 'Unassigned', 'Ideal', 'Available capacity'],
+      ...teamLineData.map((d) => [d.day, d.remaining, d.unassigned, d.ideal, d.availableCapacity]),
     ];
     exportCsv('team-burndown.csv', rows);
   }
@@ -179,13 +179,22 @@ export default function SprintOverview({ dashboard }) {
         </div>
         <div ref={teamChartRef} className="chart-box">
           <ResponsiveContainer width="100%" height={320}>
-            <LineChart data={teamLineData} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
+            <ComposedChart data={teamLineData} margin={{ top: 10, right: 20, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
               <XAxis dataKey="label" tick={{ fontSize: 12 }} />
               <YAxis tick={{ fontSize: 12 }} label={{ value: 'Hours', angle: -90, position: 'insideLeft', fontSize: 12 }} />
               <Tooltip />
               <Legend />
               <Line type="monotone" dataKey="remaining" name="Remaining" stroke="#2563eb" strokeWidth={2} dot={{ r: 2 }} />
+              <Area
+                type="monotone"
+                dataKey="unassigned"
+                name="Unassigned work"
+                stroke="#f59e0b"
+                fill="#fbbf24"
+                fillOpacity={0.2}
+                strokeWidth={1.8}
+              />
               <Line
                 type="monotone"
                 dataKey="availableCapacity"
@@ -196,7 +205,7 @@ export default function SprintOverview({ dashboard }) {
                 dot={false}
               />
               <Line type="monotone" dataKey="ideal" name="Ideal" stroke="#9ca3af" strokeDasharray="6 4" dot={false} connectNulls />
-            </LineChart>
+            </ComposedChart>
           </ResponsiveContainer>
         </div>
       </div>
