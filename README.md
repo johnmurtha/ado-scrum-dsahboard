@@ -10,7 +10,7 @@ UI; it is kept only in the local server's memory for the session and is never wr
 - **Team metrics** — elapsed/remaining sprint days, worked/burned/remaining hours, utilization,
   burn efficiency, scope added, tasks touched, active contributors.
 - **Per-person metrics** — capacity, worked, burned, remaining, completed, utilization/burn efficiency,
-  over/under, day-level activity, and tasks touched.
+  impeded, over/under, day-level activity, and tasks touched.
 - **Daily hours per person** — a person × day grid for the sprint, with each day showing:
   - **W**: worked hours
   - **B**: burned hours
@@ -18,6 +18,9 @@ UI; it is kept only in the local server's memory for the session and is never wr
 - **Per-person burndown** — every person on one chart as a distinct colored line, with a toggle
   between **Remaining work hours** and **Cumulative hours completed**.
 - **Export** — CSV for metrics/tables, PNG for charts.
+
+Impeded hours are derived from the sprint Taskboard API by finding tasks currently in the
+`Impeded` column and summing their current `Remaining Work` by assignee.
 
 ## How hours are derived
 

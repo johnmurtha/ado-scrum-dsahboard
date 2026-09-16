@@ -8,6 +8,7 @@ import {
   getTeamFieldValues,
   getCapacities,
   getTeamDaysOff,
+  getTaskboardWorkItems,
   wiql,
   getWorkItemsBatch,
   getRevisions,
@@ -55,6 +56,19 @@ function num(v) {
     return Number.isNaN(n) ? 0 : n;
   }
   return 0;
+}
+
+function isImpededColumn(v) {
+  return String(v || '').trim().toLowerCase() === 'impeded';
+}
+
+function taskboardColumn(item) {
+  return item?.column || item?.boardColumn || item?.fields?.column || item?.fields?.boardColumn || '';
+}
+
+function taskboardId(item) {
+  const id = item?.id || item?.workItemId || item?.workItem?.id || item?.targetId || item?.workItem?.targetId;
+  return Number(id) || null;
 }
 
 function enumerateDays(start, finish) {
@@ -180,8 +194,28 @@ export async function buildDashboard(team, iterationId) {
     (taskArea ? ` AND ${taskArea}` : '');
   const taskRes = await wiql(taskQuery);
   const taskIds = (taskRes.workItems || []).map((w) => w.id);
-  const taskItems = taskIds.length ? await getWorkItemsBatch(taskIds, [F.title]) : [];
+  const taskItems = taskIds.length ? await getWorkItemsBatch(taskIds, [F.title, F.assignedTo, F.remaining]) : [];
   const taskTitleById = new Map(taskItems.map((w) => [w.id, w.fields?.[F.title] || `Task ${w.id}`]));
+  const taskIdSet = new Set(taskIds);
+  let taskboardItems = [];
+  try {
+    taskboardItems = await getTaskboardWorkItems(team, iteration.id);
+  } catch (e) {
+    console.warn(`[impeded] taskboard read failed: ${e.message}`);
+  }
+  const impededTaskIds = new Set(
+    taskboardItems
+      .filter((item) => isImpededColumn(taskboardColumn(item)))
+      .map((item) => taskboardId(item))
+      .filter((id) => id && taskIdSet.has(id)),
+  );
+  const impededHoursByPerson = {};
+  for (const t of taskItems) {
+    if (!impededTaskIds.has(t.id)) continue;
+    const f = t.fields || {};
+    const assignee = personName(f[F.assignedTo]);
+    impededHoursByPerson[assignee] = round(num(impededHoursByPerson[assignee]) + num(f[F.remaining]));
+  }
 
   const revisionsByTask = await pool(taskIds, 6, async (id) => ({ id, points: summarizeRevisions(await getRevisions(id)) }));
 
@@ -368,6 +402,7 @@ export async function buildDashboard(team, iterationId) {
       const burnEfficiencyPct = pct(burnedToDate, workedToDate);
       const remainingToday = asOfDay ? round(asOfPersonRemaining[p.name] || 0) : 0;
       const completedToDate = asOfDay ? round(asOfPersonCompleted[p.name] || 0) : 0;
+      const impededToday = round(impededHoursByPerson[p.name] || 0);
       const tasksTouched = (personTaskTouches[p.name] && personTaskTouches[p.name].size) || 0;
       const avgWorkedPerDay = elapsedWorkingDays > 0 ? round(workedToDate / elapsedWorkingDays) : 0;
       const avgBurnedPerDay = elapsedWorkingDays > 0 ? round(burnedToDate / elapsedWorkingDays) : 0;
@@ -379,6 +414,7 @@ export async function buildDashboard(team, iterationId) {
         workedToDate,
         burnedToDate,
         completedToDate,
+        impededToday,
         remainingToday,
         capacityToDate,
         utilizationPct,
