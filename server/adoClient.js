@@ -152,6 +152,14 @@ export async function getTeamDaysOff(team, iterationId) {
   return data.daysOff || [];
 }
 
+export async function getTaskboardWorkItems(team, iterationId) {
+  const data = await req(
+    'GET',
+    `${teamBase(team)}/_apis/work/taskboardworkitems/${iterationId}?api-version=${API}`,
+  );
+  return Array.isArray(data) ? data : (data.value || []);
+}
+
 // --- Work items ----------------------------------------------------------
 
 export async function wiql(query) {

@@ -49,6 +49,7 @@ function PersonSprintCard({ person }) {
         <div><span className="muted">Cap/day</span><strong>{fmt(person.metrics.capacityPerDay)}</strong></div>
         <div><span className="muted">Worked</span><strong>{fmt(person.metrics.workedToDate)}h</strong></div>
         <div><span className="muted">Burned</span><strong>{fmt(person.metrics.burnedToDate)}h</strong></div>
+        <div><span className="muted">Impeded</span><strong>{fmt(person.metrics.impededToday)}h</strong></div>
         <div><span className="muted">Remaining</span><strong>{person.metrics.remainingToday == null ? '—' : `${fmt(person.metrics.remainingToday)}h`}</strong></div>
         <div><span className="muted">Completed</span><strong>{fmt(person.metrics.completedToDate)}h</strong></div>
         <div><span className="muted">Avg worked/day</span><strong>{fmt(person.metrics.avgWorkedPerDay)}h</strong></div>
