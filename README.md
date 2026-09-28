@@ -62,6 +62,7 @@ This builds the client and serves everything from http://localhost:3001.
 
 This repo includes a `wrangler.toml` with:
 - `assets.directory = "./client/dist"`
+- a Worker entry (`worker.js`) that serves both static assets and `/api/*` routes.
 
 Build first, then deploy:
 
