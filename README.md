@@ -15,6 +15,8 @@ UI; it is kept only in the local server's memory for the session and is never wr
   - **W**: worked hours
   - **B**: burned hours
 - **Team burndown** — remaining work hours per day, with an ideal guideline.
+- **Out-of-sprint work watcher** — highlights tasks that had work logged during the sprint window
+  but are currently assigned to a different iteration, including worked/burned hour rollups.
 - **Per-person burndown** — every person on one chart as a distinct colored line, with a toggle
   between **Remaining work hours** and **Cumulative hours completed**.
 - **Export** — CSV for metrics/tables, PNG for charts.
@@ -55,6 +57,18 @@ npm start
 ```
 
 This builds the client and serves everything from http://localhost:3001.
+
+### Cloudflare deploy (static assets)
+
+This repo includes a `wrangler.toml` with:
+- `assets.directory = "./client/dist"`
+
+Build first, then deploy:
+
+```bash
+npm run build
+npx wrangler deploy
+```
 
 ## Configuration
 
