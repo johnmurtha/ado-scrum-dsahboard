@@ -141,9 +141,9 @@ export default function SprintOverview({ dashboard }) {
   const peopleCards = useMemo(() => {
     const byMetricName = new Map(personMetrics.map((p) => [p.name, p]));
     const byDailyName = new Map((dailyHours?.people || []).map((p) => [p.name, p]));
-    const burndownPeople = burndown?.people || [];
+    const sourcePeople = dailyHours?.people || [];
 
-    return burndownPeople
+    return sourcePeople
       .map((p) => {
         if (isUnassigned(p.name)) return null;
         const metrics = byMetricName.get(p.name);
@@ -164,7 +164,7 @@ export default function SprintOverview({ dashboard }) {
         if (b.metrics.burnedToDate !== a.metrics.burnedToDate) return b.metrics.burnedToDate - a.metrics.burnedToDate;
         return a.name.localeCompare(b.name);
       });
-  }, [dashboard.workingDays, burndown?.people, dailyHours?.people, personMetrics, personDayTaskActivity, offSprintDayTaskActivity]);
+  }, [dashboard.workingDays, dailyHours?.people, personMetrics, personDayTaskActivity, offSprintDayTaskActivity]);
 
   function exportTeamCsv() {
     const rows = [

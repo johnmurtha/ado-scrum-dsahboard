@@ -153,6 +153,9 @@ export async function buildDashboard(team, iterationId, options = {}) {
   const maxTasksForRevisions = Number.isFinite(options.maxTasksForRevisions)
     ? Math.max(1, Math.floor(options.maxTasksForRevisions))
     : Infinity;
+  const chunkOffset = Number.isFinite(options.taskOffset) ? Math.max(0, Math.floor(options.taskOffset)) : 0;
+  const chunkLimit = Number.isFinite(options.taskLimit) ? Math.max(1, Math.floor(options.taskLimit)) : null;
+  const chunkMode = Number.isFinite(chunkLimit);
   const enableOffSprintWatch = options.enableOffSprintWatch !== false;
 
   const iterations = await getIterations(team);
@@ -207,9 +210,10 @@ export async function buildDashboard(team, iterationId, options = {}) {
   const asOfDay = [...workingDays].reverse().find((d) => d <= today) || null;
   const sprintStart = workingDays[0] || dateKey(iteration.startDate);
   const sprintEnd = workingDays[workingDays.length - 1] || dateKey(iteration.finishDate);
-  const taskItems = taskIds.length ? await getWorkItemsBatch(taskIds, [F.title, F.assignedTo, F.remaining]) : [];
+  const selectedTaskIds = chunkMode ? taskIds.slice(chunkOffset, chunkOffset + chunkLimit) : taskIds;
+  const taskItems = selectedTaskIds.length ? await getWorkItemsBatch(selectedTaskIds, [F.title, F.assignedTo, F.remaining]) : [];
   const taskTitleById = new Map(taskItems.map((w) => [w.id, w.fields?.[F.title] || `Task ${w.id}`]));
-  const taskIdSet = new Set(taskIds);
+  const taskIdSet = new Set(selectedTaskIds);
   let taskboardItems = [];
   try {
     taskboardItems = await getTaskboardWorkItems(team, iteration.id);
@@ -230,7 +234,7 @@ export async function buildDashboard(team, iterationId, options = {}) {
     impededHoursByPerson[assignee] = round(num(impededHoursByPerson[assignee]) + num(f[F.remaining]));
   }
 
-  const revisionTaskIds = taskIds.slice(0, Math.min(taskIds.length, maxTasksForRevisions));
+  const revisionTaskIds = selectedTaskIds.slice(0, Math.min(selectedTaskIds.length, maxTasksForRevisions));
   const revisionsByTask = await pool(
     revisionTaskIds,
     6,
@@ -243,7 +247,7 @@ export async function buildDashboard(team, iterationId, options = {}) {
   const offSprintByPerson = {};
 
   // Skip off-sprint watch on day 1 of sprint planning updates.
-  if (enableOffSprintWatch && asOfDay && workingDays.filter((d) => d <= asOfDay).length > 1) {
+  if (!chunkMode && enableOffSprintWatch && asOfDay && workingDays.filter((d) => d <= asOfDay).length > 1) {
     // Tasks worked during this sprint window but currently assigned to a
     // different iteration path (outside the selected sprint).
     const outSprintQuery =
@@ -643,9 +647,19 @@ export async function buildDashboard(team, iterationId, options = {}) {
     },
     taskCount: taskIds.length,
     revisionsTaskCount: revisionTaskIds.length,
+    chunk: chunkMode ? {
+      offset: chunkOffset,
+      limit: chunkLimit,
+      count: revisionTaskIds.length,
+      hasMore: chunkOffset + revisionTaskIds.length < taskIds.length,
+      nextOffset: chunkOffset + revisionTaskIds.length,
+    } : null,
     warnings: [
       ...(revisionsTruncated
-        ? [`Cloud limit mode: revision history capped at ${revisionTaskIds.length} of ${taskIds.length} tasks.`]
+        ? [`Cloud limit mode: revision history capped at ${revisionTaskIds.length} of ${selectedTaskIds.length} selected tasks.`]
+        : []),
+      ...(chunkMode
+        ? [`Cloud chunk mode: loaded tasks ${chunkOffset + 1}-${Math.min(taskIds.length, chunkOffset + revisionTaskIds.length)} of ${taskIds.length}.`]
         : []),
       ...(!enableOffSprintWatch ? ['Cloud limit mode: outside-sprint watcher disabled.'] : []),
     ],
