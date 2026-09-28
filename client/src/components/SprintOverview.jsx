@@ -37,6 +37,7 @@ function PersonSprintCard({ person }) {
   const [hoverIndex, setHoverIndex] = useState(null);
   const hovered = hoverIndex == null ? null : person.series[hoverIndex] || null;
   const taskRows = hovered?.tasks || [];
+  const offSprintRows = hovered?.offSprintTasks || [];
 
   return (
     <div className="person-card">
@@ -84,12 +85,24 @@ function PersonSprintCard({ person }) {
           Day details {hovered ? `(${hovered.label})` : ''}
         </div>
         {!hovered && <div className="muted">Hover a chart day to see which tasks were worked/burned.</div>}
-        {hovered && !taskRows.length && <div className="muted">No worked/burned task changes on this day.</div>}
+        {hovered && !taskRows.length && !offSprintRows.length && <div className="muted">No worked/burned task changes on this day.</div>}
         {hovered && taskRows.length > 0 && (
           <ul className="task-activity-list">
             {taskRows.map((t) => (
               <li key={`${t.id}-${hovered.day}`}>
                 <span className="task-activity-name">#{t.id} {t.title}</span>
+                <span className="task-activity-hours">W {fmt(t.worked)}h · B {fmt(t.burned)}h</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {hovered && offSprintRows.length > 0 && (
+          <ul className="task-activity-list">
+            {offSprintRows.map((t) => (
+              <li key={`off-${t.id}-${hovered.day}`} className="task-activity-off">
+                <span className="task-activity-name">
+                  #{t.id} {t.title}
+                </span>
                 <span className="task-activity-hours">W {fmt(t.worked)}h · B {fmt(t.burned)}h</span>
               </li>
             ))}
@@ -104,7 +117,15 @@ export default function SprintOverview({ dashboard }) {
   const teamChartRef = useRef(null);
   if (!dashboard) return null;
 
-  const { teamMetrics, personMetrics = [], burndown, dailyHours, personDayTaskActivity } = dashboard;
+  const {
+    teamMetrics,
+    personMetrics = [],
+    burndown,
+    dailyHours,
+    personDayTaskActivity,
+    offSprintWork,
+    offSprintDayTaskActivity,
+  } = dashboard;
   const teamLineData = useMemo(() => {
     const base = burndown?.team || [];
     const dayCapacity = (dashboard.workingDays || []).map((_, i) =>
@@ -134,6 +155,7 @@ export default function SprintOverview({ dashboard }) {
           worked: daily?.cells?.[i]?.worked ?? 0,
           burned: daily?.cells?.[i]?.burned ?? 0,
           tasks: personDayTaskActivity?.[p.name]?.[day] || [],
+          offSprintTasks: offSprintDayTaskActivity?.[p.name]?.[day] || [],
         }));
         return { name: p.name, metrics, series };
       })
@@ -142,7 +164,7 @@ export default function SprintOverview({ dashboard }) {
         if (b.metrics.burnedToDate !== a.metrics.burnedToDate) return b.metrics.burnedToDate - a.metrics.burnedToDate;
         return a.name.localeCompare(b.name);
       });
-  }, [dashboard.workingDays, burndown?.people, dailyHours?.people, personMetrics, personDayTaskActivity]);
+  }, [dashboard.workingDays, burndown?.people, dailyHours?.people, personMetrics, personDayTaskActivity, offSprintDayTaskActivity]);
 
   function exportTeamCsv() {
     const rows = [
@@ -167,6 +189,14 @@ export default function SprintOverview({ dashboard }) {
           <div className="metric-card"><div className="metric-label">Remaining today</div><div className="metric-value">{teamMetrics?.remainingToday == null ? '—' : `${fmt(teamMetrics?.remainingToday)}h`}</div></div>
           <div className="metric-card"><div className="metric-label">Burn efficiency</div><div className="metric-value">{pct(teamMetrics?.burnEfficiencyPct)}</div></div>
           <div className="metric-card"><div className="metric-label">Scope added to date</div><div className="metric-value">{fmt(teamMetrics?.scopeAddedToDate)}h</div></div>
+          <div className="metric-card"><div className="metric-label">Worked outside sprint</div><div className="metric-value">{fmt(offSprintWork?.totals?.worked)}h</div></div>
+          <div className="metric-card"><div className="metric-label">Outside-sprint tasks worked</div><div className="metric-value">{offSprintWork?.totals?.taskCount || 0}</div></div>
+          {offSprintWork?.skippedOnDayOne && (
+            <div className="metric-card">
+              <div className="metric-label">Outside-sprint watcher</div>
+              <div className="metric-value">Skipped (day 1)</div>
+            </div>
+          )}
         </div>
       </div>
 
