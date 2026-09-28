@@ -244,10 +244,18 @@ async function loadDashboardChunked(team, iterationId) {
   const limit = 20;
   let offset = 0;
   const chunks = [];
+  let batch = 1;
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const c = await call('GET', `/api/dashboard-chunk?team=${encodeURIComponent(team)}&iterationId=${encodeURIComponent(iterationId)}&offset=${offset}&limit=${limit}`);
     chunks.push(c);
+    const start = Number.isFinite(c?.chunk?.offset) ? c.chunk.offset + 1 : offset + 1;
+    const end = Number.isFinite(c?.chunk?.nextOffset) ? c.chunk.nextOffset : (offset + limit);
+    const total = c?.taskCount ?? 'unknown';
+    // Keep noisy diagnostics out of UI; surface progress in devtools.
+    // eslint-disable-next-line no-console
+    console.info(`[dashboard chunk] batch ${batch}: tasks ${start}-${Math.min(end, total)} of ${total}`);
+    batch += 1;
     if (!c?.chunk?.hasMore) break;
     offset = c.chunk.nextOffset;
   }
