@@ -224,6 +224,10 @@ thead .sticky-col { background: #fff; }
   gap: 8px;
   font-size: 12px;
 }
+.task-activity-list li.task-activity-off {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
 .task-activity-name {
   overflow: hidden;
   text-overflow: ellipsis;
