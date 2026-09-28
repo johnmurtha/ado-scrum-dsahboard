@@ -66,6 +66,18 @@ app.get('/api/dashboard', wrap(async (req, res) => {
   res.json(await buildDashboard(team, iterationId));
 }));
 
+app.get('/api/dashboard-chunk', wrap(async (req, res) => {
+  const { team, iterationId, offset, limit } = req.query;
+  if (!team || !iterationId) return res.status(400).json({ error: 'team and iterationId are required' });
+  const parsedOffset = Number.isFinite(Number(offset)) ? Number(offset) : 0;
+  const parsedLimit = Number.isFinite(Number(limit)) ? Number(limit) : 25;
+  res.json(await buildDashboard(team, iterationId, {
+    taskOffset: parsedOffset,
+    taskLimit: parsedLimit,
+    enableOffSprintWatch: false,
+  }));
+}));
+
 app.get('/api/features', wrap(async (req, res) => {
   const { team, iterationId } = req.query;
   if (!team) return res.status(400).json({ error: 'team is required' });

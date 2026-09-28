@@ -68,6 +68,10 @@ Cloudflare Worker requests have subrequest limits. The worker API path applies a
 conservative "limit mode" (caps revision-history tasks and disables the outside-sprint
 watcher) to avoid invocation failures on large sprints.
 
+For large sprints, the client now uses chunked dashboard loading (`/api/dashboard-chunk`)
+and merges results client-side so all tasks can be included without hitting per-invocation
+subrequest caps.
+
 Build first, then deploy:
 
 ```bash

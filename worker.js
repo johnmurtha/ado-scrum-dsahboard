@@ -75,6 +75,20 @@ async function handleApi(request, url) {
     }));
   }
 
+  if (method === 'GET' && path === '/api/dashboard-chunk') {
+    const team = url.searchParams.get('team');
+    const iterationId = url.searchParams.get('iterationId');
+    const offset = Number(url.searchParams.get('offset') || 0);
+    const limit = Number(url.searchParams.get('limit') || 20);
+    if (!team || !iterationId) return json({ error: 'team and iterationId are required' }, 400);
+    return json(await buildDashboard(team, iterationId, {
+      taskOffset: Number.isFinite(offset) ? offset : 0,
+      taskLimit: Number.isFinite(limit) ? limit : 20,
+      enableOffSprintWatch: false,
+      maxTasksForRevisions: Infinity,
+    }));
+  }
+
   if (method === 'GET' && path === '/api/features') {
     const team = url.searchParams.get('team');
     const iterationId = url.searchParams.get('iterationId');
