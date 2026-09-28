@@ -115,6 +115,11 @@ export default function App() {
       </div>
 
       {error && <div className="error banner">{error}</div>}
+      {!!dashboard?.warnings?.length && (
+        <div className="notice">
+          {dashboard.warnings.join(' ')}
+        </div>
+      )}
       {loading && <div className="muted center pad">Loading data from Azure DevOps…</div>}
 
       {!loading && (

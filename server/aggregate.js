@@ -86,6 +86,10 @@ function inRanges(key, ranges) {
   return ranges.some((r) => key >= dateKey(r.start) && key <= dateKey(r.end));
 }
 
+function betweenDays(key, start, end) {
+  return key >= start && key <= end;
+}
+
 const esc = (s) => String(s).replace(/'/g, "''");
 
 // Build a WIQL predicate that limits a query to a team's configured area paths.
@@ -145,7 +149,12 @@ function existsAsOf(points, dayKey) {
 
 // --- main dashboard ------------------------------------------------------
 
-export async function buildDashboard(team, iterationId) {
+export async function buildDashboard(team, iterationId, options = {}) {
+  const maxTasksForRevisions = Number.isFinite(options.maxTasksForRevisions)
+    ? Math.max(1, Math.floor(options.maxTasksForRevisions))
+    : Infinity;
+  const enableOffSprintWatch = options.enableOffSprintWatch !== false;
+
   const iterations = await getIterations(team);
   const iteration = iterations.find((it) => it.id === iterationId) || iterations[0];
   if (!iteration) throw new Error('No iterations found for this team.');
@@ -194,6 +203,10 @@ export async function buildDashboard(team, iterationId) {
     (taskArea ? ` AND ${taskArea}` : '');
   const taskRes = await wiql(taskQuery);
   const taskIds = (taskRes.workItems || []).map((w) => w.id);
+  const today = dateKey(new Date());
+  const asOfDay = [...workingDays].reverse().find((d) => d <= today) || null;
+  const sprintStart = workingDays[0] || dateKey(iteration.startDate);
+  const sprintEnd = workingDays[workingDays.length - 1] || dateKey(iteration.finishDate);
   const taskItems = taskIds.length ? await getWorkItemsBatch(taskIds, [F.title, F.assignedTo, F.remaining]) : [];
   const taskTitleById = new Map(taskItems.map((w) => [w.id, w.fields?.[F.title] || `Task ${w.id}`]));
   const taskIdSet = new Set(taskIds);
@@ -217,7 +230,127 @@ export async function buildDashboard(team, iterationId) {
     impededHoursByPerson[assignee] = round(num(impededHoursByPerson[assignee]) + num(f[F.remaining]));
   }
 
-  const revisionsByTask = await pool(taskIds, 6, async (id) => ({ id, points: summarizeRevisions(await getRevisions(id)) }));
+  const revisionTaskIds = taskIds.slice(0, Math.min(taskIds.length, maxTasksForRevisions));
+  const revisionsByTask = await pool(
+    revisionTaskIds,
+    6,
+    async (id) => ({ id, points: summarizeRevisions(await getRevisions(id)) }),
+  );
+  const revisionsTruncated = revisionTaskIds.length < taskIds.length;
+
+  const offSprintDayTaskActivity = {};
+  let offSprintItems = [];
+  const offSprintByPerson = {};
+
+  // Skip off-sprint watch on day 1 of sprint planning updates.
+  if (enableOffSprintWatch && asOfDay && workingDays.filter((d) => d <= asOfDay).length > 1) {
+    // Tasks worked during this sprint window but currently assigned to a
+    // different iteration path (outside the selected sprint).
+    const outSprintQuery =
+      `SELECT [System.Id] FROM WorkItems WHERE [System.WorkItemType] = 'Task' ` +
+      `AND [System.ChangedDate] >= '${sprintStart}' ` +
+      `AND [System.ChangedDate] <= '${sprintEnd}' ` +
+      `AND NOT [System.IterationPath] UNDER '${esc(iteration.path)}'` +
+      (taskArea ? ` AND ${taskArea}` : '');
+    const outSprintRes = await wiql(outSprintQuery);
+    const outSprintIds = Array.from(
+      new Set((outSprintRes.workItems || []).map((w) => w.id).filter((id) => !taskIdSet.has(id))),
+    );
+    const outSprintItemsRaw = outSprintIds.length
+      ? await getWorkItemsBatch(outSprintIds, [F.title, F.iterationPath])
+      : [];
+    const outSprintById = new Map(outSprintItemsRaw.map((w) => [w.id, w.fields || {}]));
+    const outSprintRevisions = await pool(outSprintIds, 4, async (id) => ({ id, points: summarizeRevisions(await getRevisions(id)) }));
+
+    for (const t of outSprintRevisions) {
+      const f = outSprintById.get(t.id) || {};
+      const perPerson = {};
+      let totalWorked = 0;
+      let totalBurned = 0;
+      let prevCompleted = 0;
+      let prevRemaining = null;
+
+      for (const p of t.points) {
+        const key = dateKey(p.date);
+        const inSprintWindow = betweenDays(key, sprintStart, sprintEnd);
+        const wDelta = p.completed - prevCompleted;
+        prevCompleted = p.completed;
+        if (inSprintWindow && wDelta > 0) {
+          if (!perPerson[p.assignee]) perPerson[p.assignee] = { worked: 0, burned: 0 };
+          perPerson[p.assignee].worked += wDelta;
+          totalWorked += wDelta;
+          if (!offSprintDayTaskActivity[p.assignee]) offSprintDayTaskActivity[p.assignee] = {};
+          if (!offSprintDayTaskActivity[p.assignee][key]) offSprintDayTaskActivity[p.assignee][key] = {};
+          const slot = offSprintDayTaskActivity[p.assignee][key];
+          if (!slot[t.id]) {
+            slot[t.id] = {
+              id: t.id,
+              title: f[F.title] || `Task ${t.id}`,
+              iterationPath: f[F.iterationPath] || '',
+              worked: 0,
+              burned: 0,
+            };
+          }
+          slot[t.id].worked += wDelta;
+        }
+
+        if (prevRemaining !== null) {
+          const burn = prevRemaining - p.remaining;
+          if (inSprintWindow && burn > 0) {
+            if (!perPerson[p.assignee]) perPerson[p.assignee] = { worked: 0, burned: 0 };
+            perPerson[p.assignee].burned += burn;
+            totalBurned += burn;
+            if (!offSprintDayTaskActivity[p.assignee]) offSprintDayTaskActivity[p.assignee] = {};
+            if (!offSprintDayTaskActivity[p.assignee][key]) offSprintDayTaskActivity[p.assignee][key] = {};
+            const slot = offSprintDayTaskActivity[p.assignee][key];
+            if (!slot[t.id]) {
+              slot[t.id] = {
+                id: t.id,
+                title: f[F.title] || `Task ${t.id}`,
+                iterationPath: f[F.iterationPath] || '',
+                worked: 0,
+                burned: 0,
+              };
+            }
+            slot[t.id].burned += burn;
+          }
+        }
+        prevRemaining = p.remaining;
+      }
+
+      if (totalWorked <= 0 && totalBurned <= 0) continue;
+
+      const people = Object.entries(perPerson)
+        .map(([name, v]) => ({ name, worked: round(v.worked), burned: round(v.burned) }))
+        .sort((a, b) => (b.worked + b.burned) - (a.worked + a.burned));
+
+      for (const p of people) {
+        if (!offSprintByPerson[p.name]) offSprintByPerson[p.name] = { worked: 0, burned: 0, tasks: 0 };
+        offSprintByPerson[p.name].worked += p.worked;
+        offSprintByPerson[p.name].burned += p.burned;
+        offSprintByPerson[p.name].tasks += 1;
+      }
+
+      offSprintItems.push({
+        id: t.id,
+        title: f[F.title] || `Task ${t.id}`,
+        iterationPath: f[F.iterationPath] || '',
+        worked: round(totalWorked),
+        burned: round(totalBurned),
+        people,
+      });
+    }
+  }
+
+  offSprintItems.sort((a, b) => (b.worked + b.burned) - (a.worked + a.burned));
+  const offSprintPeople = Object.entries(offSprintByPerson)
+    .map(([name, v]) => ({ name, worked: round(v.worked), burned: round(v.burned), tasks: v.tasks }))
+    .sort((a, b) => (b.worked + b.burned) - (a.worked + a.burned));
+  const offSprintTotals = {
+    worked: round(offSprintItems.reduce((s, it) => s + it.worked, 0)),
+    burned: round(offSprintItems.reduce((s, it) => s + it.burned, 0)),
+    taskCount: offSprintItems.length,
+  };
 
   // Ensure every assignee that logged work appears as a person row.
   for (const t of revisionsByTask) {
@@ -225,10 +358,6 @@ export async function buildDashboard(team, iterationId) {
       if (!people.has(p.assignee)) people.set(p.assignee, { name: p.assignee, capacityPerDay: 0, daysOff: [] });
     }
   }
-
-  const today = dateKey(new Date());
-  const asOfDay = [...workingDays].reverse().find((d) => d <= today) || null;
-  const sprintStart = workingDays[0] || dateKey(iteration.startDate);
 
   // --- Daily hours per person (completed-work deltas attributed to assignee) ---
   // dailyWorked[dayKey][person] = hours logged that day.
@@ -467,6 +596,28 @@ export async function buildDashboard(team, iterationId) {
     dailyHours,
     capacityDiag,
     teamMetrics,
+    offSprintWork: {
+      totals: offSprintTotals,
+      byPerson: offSprintPeople,
+      items: offSprintItems,
+      sprintStart,
+      sprintEnd,
+      skippedOnDayOne: !!(asOfDay && workingDays.filter((d) => d <= asOfDay).length <= 1),
+      disabledByLimit: !enableOffSprintWatch,
+    },
+    offSprintDayTaskActivity: Object.fromEntries(
+      Object.entries(offSprintDayTaskActivity).map(([person, days]) => ([
+        person,
+        Object.fromEntries(
+          Object.entries(days).map(([day, items]) => ([
+            day,
+            Object.values(items)
+              .map((it) => ({ ...it, worked: round(it.worked), burned: round(it.burned) }))
+              .sort((a, b) => (b.worked + b.burned) - (a.worked + a.burned)),
+          ])),
+        ),
+      ])),
+    ),
     personMetrics,
     personDayTaskActivity: Object.fromEntries(
       Object.entries(personDayTaskActivity).map(([person, days]) => ([
@@ -491,6 +642,13 @@ export async function buildDashboard(team, iterationId) {
       })),
     },
     taskCount: taskIds.length,
+    revisionsTaskCount: revisionTaskIds.length,
+    warnings: [
+      ...(revisionsTruncated
+        ? [`Cloud limit mode: revision history capped at ${revisionTaskIds.length} of ${taskIds.length} tasks.`]
+        : []),
+      ...(!enableOffSprintWatch ? ['Cloud limit mode: outside-sprint watcher disabled.'] : []),
+    ],
     generatedAt: new Date().toISOString(),
   };
 }

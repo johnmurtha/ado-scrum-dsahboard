@@ -69,7 +69,10 @@ async function handleApi(request, url) {
     const team = url.searchParams.get('team');
     const iterationId = url.searchParams.get('iterationId');
     if (!team || !iterationId) return json({ error: 'team and iterationId are required' }, 400);
-    return json(await buildDashboard(team, iterationId));
+    return json(await buildDashboard(team, iterationId, {
+      maxTasksForRevisions: 25,
+      enableOffSprintWatch: false,
+    }));
   }
 
   if (method === 'GET' && path === '/api/features') {

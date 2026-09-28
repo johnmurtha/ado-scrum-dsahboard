@@ -64,6 +64,10 @@ This repo includes a `wrangler.toml` with:
 - `assets.directory = "./client/dist"`
 - a Worker entry (`worker.js`) that serves both static assets and `/api/*` routes.
 
+Cloudflare Worker requests have subrequest limits. The worker API path applies a
+conservative "limit mode" (caps revision-history tasks and disables the outside-sprint
+watcher) to avoid invocation failures on large sprints.
+
 Build first, then deploy:
 
 ```bash
