@@ -86,7 +86,7 @@ async function handleApi(request, url) {
       taskLimit: Number.isFinite(limit) ? limit : 20,
       enableOffSprintWatch: true,
       maxTasksForRevisions: Infinity,
-      maxOffSprintTasks: 40,
+      maxOffSprintTasks: 10,
     }));
   }
 
