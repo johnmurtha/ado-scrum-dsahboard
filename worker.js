@@ -84,8 +84,9 @@ async function handleApi(request, url) {
     return json(await buildDashboard(team, iterationId, {
       taskOffset: Number.isFinite(offset) ? offset : 0,
       taskLimit: Number.isFinite(limit) ? limit : 20,
-      enableOffSprintWatch: false,
+      enableOffSprintWatch: true,
       maxTasksForRevisions: Infinity,
+      maxOffSprintTasks: 40,
     }));
   }
 
