@@ -49,6 +49,10 @@ function personName(assignedTo) {
   return assignedTo.displayName || 'Unassigned';
 }
 
+function isUnassignedPerson(name) {
+  return String(name || '').trim().toLowerCase() === 'unassigned';
+}
+
 function num(v) {
   if (typeof v === 'number') return Number.isNaN(v) ? 0 : v;
   if (typeof v === 'string' && v.trim() !== '') {
@@ -260,7 +264,8 @@ export async function buildDashboard(team, iterationId, options = {}) {
       `AND [System.ChangedDate] >= '${sprintStart}' ` +
       `AND [System.ChangedDate] <= '${sprintEnd}' ` +
       `AND NOT [System.IterationPath] UNDER '${esc(iteration.path)}'` +
-      (taskArea ? ` AND ${taskArea}` : '');
+      (taskArea ? ` AND ${taskArea}` : '') +
+      ` ORDER BY [System.ChangedDate] DESC`;
     const outSprintRes = await wiql(outSprintQuery);
     const outSprintIds = Array.from(
       new Set((outSprintRes.workItems || []).map((w) => w.id).filter((id) => !taskIdSet.has(id))),
@@ -289,7 +294,7 @@ export async function buildDashboard(team, iterationId, options = {}) {
         const inSprintWindow = betweenDays(key, sprintStart, sprintEnd);
         const wDelta = p.completed - prevCompleted;
         prevCompleted = p.completed;
-        if (inSprintWindow && wDelta > 0) {
+        if (inSprintWindow && wDelta > 0 && !isUnassignedPerson(p.assignee)) {
           if (!perPerson[p.assignee]) perPerson[p.assignee] = { worked: 0, burned: 0 };
           perPerson[p.assignee].worked += wDelta;
           totalWorked += wDelta;
@@ -310,7 +315,7 @@ export async function buildDashboard(team, iterationId, options = {}) {
 
         if (prevRemaining !== null) {
           const burn = prevRemaining - p.remaining;
-          if (inSprintWindow && burn > 0) {
+          if (inSprintWindow && burn > 0 && !isUnassignedPerson(p.assignee)) {
             if (!perPerson[p.assignee]) perPerson[p.assignee] = { worked: 0, burned: 0 };
             perPerson[p.assignee].burned += burn;
             totalBurned += burn;
@@ -332,7 +337,9 @@ export async function buildDashboard(team, iterationId, options = {}) {
         prevRemaining = p.remaining;
       }
 
-      if (totalWorked <= 0 && totalBurned <= 0) continue;
+      // "Outside-sprint tasks worked" must only include tasks with
+      // positive worked deltas during the sprint window.
+      if (totalWorked <= 0) continue;
 
       const people = Object.entries(perPerson)
         .map(([name, v]) => ({ name, worked: round(v.worked), burned: round(v.burned) }))
@@ -360,11 +367,18 @@ export async function buildDashboard(team, iterationId, options = {}) {
   const offSprintPeople = Object.entries(offSprintByPerson)
     .map(([name, v]) => ({ name, worked: round(v.worked), burned: round(v.burned), tasks: v.tasks }))
     .sort((a, b) => (b.worked + b.burned) - (a.worked + a.burned));
+  const offSprintPeopleWithWorked = new Set(
+    offSprintPeople.filter((p) => p.worked > 0).map((p) => p.name),
+  );
   const offSprintTotals = {
     worked: round(offSprintItems.reduce((s, it) => s + it.worked, 0)),
     burned: round(offSprintItems.reduce((s, it) => s + it.burned, 0)),
     taskCount: offSprintItems.length,
   };
+
+  for (const name of offSprintPeopleWithWorked) {
+    if (!people.has(name)) people.set(name, { name, capacityPerDay: 0, daysOff: [] });
+  }
 
   // Ensure every assignee that logged work appears as a person row.
   for (const t of revisionsByTask) {
@@ -570,7 +584,13 @@ export async function buildDashboard(team, iterationId, options = {}) {
         tasksTouched,
       };
     })
-    .filter((p) => p.capacityPerDay > 0 || p.workedToDate > 0 || p.burnedToDate > 0 || p.remainingToday > 0)
+    .filter(
+      (p) => p.capacityPerDay > 0
+        || p.workedToDate > 0
+        || p.burnedToDate > 0
+        || p.remainingToday > 0
+        || offSprintPeopleWithWorked.has(p.name),
+    )
     .sort((a, b) => {
       if (b.burnedToDate !== a.burnedToDate) return b.burnedToDate - a.burnedToDate;
       return a.name.localeCompare(b.name);
