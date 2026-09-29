@@ -75,7 +75,7 @@ app.get('/api/dashboard-chunk', wrap(async (req, res) => {
     taskOffset: parsedOffset,
     taskLimit: parsedLimit,
     enableOffSprintWatch: true,
-    maxOffSprintTasks: 40,
+    maxOffSprintTasks: 10,
   }));
 }));
 

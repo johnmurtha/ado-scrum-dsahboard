@@ -7,7 +7,11 @@ async function call(method, url, body) {
   });
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
-  if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
+  if (!res.ok) {
+    const err = new Error(data?.error || `Request failed (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -238,13 +242,28 @@ function mergeDashboardChunks(chunks) {
 }
 
 async function loadDashboardChunked(team, iterationId) {
-  const limit = 20;
+  let limit = 20;
   let offset = 0;
   const chunks = [];
   let batch = 1;
   // eslint-disable-next-line no-constant-condition
   while (true) {
-    const c = await call('GET', `/api/dashboard-chunk?team=${encodeURIComponent(team)}&iterationId=${encodeURIComponent(iterationId)}&offset=${offset}&limit=${limit}`);
+    let c;
+    try {
+      c = await call(
+        'GET',
+        `/api/dashboard-chunk?team=${encodeURIComponent(team)}&iterationId=${encodeURIComponent(iterationId)}&offset=${offset}&limit=${limit}`,
+      );
+    } catch (err) {
+      if (limit > 5) {
+        const nextLimit = Math.max(5, Math.floor(limit / 2));
+        // eslint-disable-next-line no-console
+        console.warn(`[dashboard chunk] batch failed at offset ${offset} (limit=${limit}): ${err.message}. Retrying with limit=${nextLimit}.`);
+        limit = nextLimit;
+        continue;
+      }
+      throw err;
+    }
     chunks.push(c);
     const start = Number.isFinite(c?.chunk?.offset) ? c.chunk.offset + 1 : offset + 1;
     const end = Number.isFinite(c?.chunk?.nextOffset) ? c.chunk.nextOffset : (offset + limit);
@@ -268,8 +287,11 @@ export const api = {
   dashboard: async (team, iterationId) => {
     try {
       return await loadDashboardChunked(team, iterationId);
-    } catch {
-      return call('GET', `/api/dashboard?team=${encodeURIComponent(team)}&iterationId=${encodeURIComponent(iterationId)}`);
+    } catch (err) {
+      if (err?.status === 404) {
+        return call('GET', `/api/dashboard?team=${encodeURIComponent(team)}&iterationId=${encodeURIComponent(iterationId)}`);
+      }
+      throw err;
     }
   },
   features: (team, iterationId) =>
