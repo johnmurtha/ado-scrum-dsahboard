@@ -74,7 +74,8 @@ app.get('/api/dashboard-chunk', wrap(async (req, res) => {
   res.json(await buildDashboard(team, iterationId, {
     taskOffset: parsedOffset,
     taskLimit: parsedLimit,
-    enableOffSprintWatch: false,
+    enableOffSprintWatch: true,
+    maxOffSprintTasks: 10,
   }));
 }));
 
