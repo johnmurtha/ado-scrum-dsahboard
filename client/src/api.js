@@ -225,10 +225,7 @@ function mergeDashboardChunks(chunks) {
     personMetrics,
     personDayTaskActivity: normalizeActivity(activityMap),
     offSprintDayTaskActivity: normalizeActivity(offSprintActivityMap),
-    offSprintWork: {
-      ...(first.offSprintWork || {}),
-      disabledByLimit: true,
-    },
+    offSprintWork: first.offSprintWork || {},
     burndown: {
       team: burndownTeam,
       people: burndownPeople,
