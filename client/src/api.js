@@ -66,6 +66,7 @@ function mergeDashboardChunks(chunks) {
   const activityMap = {};
   const offSprintActivityMap = {};
   let scopeAddedToDate = 0;
+  let scopeRemovedToDate = 0;
 
   const ensurePerson = (name, capacityPerDay = 0, daysOff = []) => {
     if (!people[name]) {
@@ -76,6 +77,7 @@ function mergeDashboardChunks(chunks) {
 
   for (const c of chunks) {
     scopeAddedToDate += c.teamMetrics?.scopeAddedToDate || 0;
+    scopeRemovedToDate += c.teamMetrics?.scopeRemovedToDate || 0;
     for (const p of c.dailyHours?.people || []) {
       const row = ensurePerson(p.name, p.capacityPerDay, p.daysOff || []);
       row.capacityPerDay = Math.max(row.capacityPerDay || 0, p.capacityPerDay || 0);
@@ -216,6 +218,7 @@ function mergeDashboardChunks(chunks) {
     utilizationPct: pct(teamWorkedToDate, teamCapacityToDate),
     burnEfficiencyPct: pct(teamBurnedToDate, teamWorkedToDate),
     scopeAddedToDate: round(scopeAddedToDate),
+    scopeRemovedToDate: round(scopeRemovedToDate),
     generatedThrough: asOfDay,
   };
 
