@@ -225,6 +225,7 @@ function mergeDashboardChunks(chunks) {
     workingDays: days,
     dailyHours,
     capacityDiag: first.capacityDiag,
+    storyPoints: first.storyPoints,
     teamMetrics,
     personMetrics,
     personDayTaskActivity: normalizeActivity(activityMap),
