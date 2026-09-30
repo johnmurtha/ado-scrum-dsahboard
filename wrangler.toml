@@ -5,3 +5,8 @@ compatibility_flags = ["nodejs_compat"]
 
 [assets]
 directory = "./client/dist"
+
+# Required by `wrangler preview`. Assets, compatibility settings, and
+# placement stay at the top level; this block only holds preview-specific
+# vars and bindings, so it can be empty.
+[previews]

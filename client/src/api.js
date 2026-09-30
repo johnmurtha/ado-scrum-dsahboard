@@ -242,11 +242,15 @@ function mergeDashboardChunks(chunks) {
   };
 }
 
-async function loadDashboardChunked(team, iterationId) {
+async function loadDashboardChunked(team, iterationId, onProgress) {
   let limit = 20;
   let offset = 0;
   const chunks = [];
   let batch = 1;
+  const report = (stage, loaded, total) => {
+    if (typeof onProgress === 'function') onProgress({ stage, batch, loaded, total });
+  };
+  report('start', 0, null);
   // eslint-disable-next-line no-constant-condition
   while (true) {
     let c;
@@ -261,6 +265,7 @@ async function loadDashboardChunked(team, iterationId) {
         // eslint-disable-next-line no-console
         console.warn(`[dashboard chunk] batch failed at offset ${offset} (limit=${limit}): ${err.message}. Retrying with limit=${nextLimit}.`);
         limit = nextLimit;
+        report('retry', offset, null);
         continue;
       }
       throw err;
@@ -272,10 +277,12 @@ async function loadDashboardChunked(team, iterationId) {
     // Keep noisy diagnostics out of UI; surface progress in devtools.
     // eslint-disable-next-line no-console
     console.info(`[dashboard chunk] batch ${batch}: tasks ${start}-${Math.min(end, total)} of ${total}`);
+    report('loading', Math.min(end, Number.isFinite(c?.taskCount) ? c.taskCount : end), c?.taskCount ?? null);
     batch += 1;
     if (!c?.chunk?.hasMore) break;
     offset = c.chunk.nextOffset;
   }
+  report('merging', chunks[0]?.taskCount ?? null, chunks[0]?.taskCount ?? null);
   return mergeDashboardChunks(chunks);
 }
 
@@ -285,9 +292,9 @@ export const api = {
   disconnect: () => call('POST', '/api/disconnect'),
   teams: () => call('GET', '/api/teams'),
   iterations: (team) => call('GET', `/api/iterations?team=${encodeURIComponent(team)}`),
-  dashboard: async (team, iterationId) => {
+  dashboard: async (team, iterationId, onProgress) => {
     try {
-      return await loadDashboardChunked(team, iterationId);
+      return await loadDashboardChunked(team, iterationId, onProgress);
     } catch (err) {
       if (err?.status === 404) {
         return call('GET', `/api/dashboard?team=${encodeURIComponent(team)}&iterationId=${encodeURIComponent(iterationId)}`);

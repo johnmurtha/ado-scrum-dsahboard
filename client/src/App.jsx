@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from './api.js';
 import ConnectionForm from './components/ConnectionForm.jsx';
 import SprintOverview from './components/SprintOverview.jsx';
+import LoadingScreen from './components/LoadingScreen.jsx';
 
 export default function App() {
   const [conn, setConn] = useState(null); // { org, project, teams }
@@ -10,6 +11,7 @@ export default function App() {
   const [iterationId, setIterationId] = useState('');
   const [dashboard, setDashboard] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(null);
   const [error, setError] = useState(null);
 
   // Restore an existing server session (e.g. after a page refresh in dev).
@@ -47,14 +49,16 @@ export default function App() {
   async function load() {
     if (!team || !iterationId) return;
     setLoading(true);
+    setProgress(null);
     setError(null);
     try {
-      const d = await api.dashboard(team, iterationId);
+      const d = await api.dashboard(team, iterationId, setProgress);
       setDashboard(d);
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
+      setProgress(null);
     }
   }
 
@@ -115,7 +119,7 @@ export default function App() {
       </div>
 
       {error && <div className="error banner">{error}</div>}
-      {loading && <div className="muted center pad">Loading data from Azure DevOps…</div>}
+      {loading && <LoadingScreen progress={progress} />}
 
       {!loading && (
         <main className="content">
