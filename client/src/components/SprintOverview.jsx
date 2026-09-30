@@ -125,6 +125,7 @@ export default function SprintOverview({ dashboard }) {
     personDayTaskActivity,
     offSprintWork,
     offSprintDayTaskActivity,
+    storyPoints,
   } = dashboard;
   const teamLineData = useMemo(() => {
     const base = burndown?.team || [];
@@ -181,6 +182,14 @@ export default function SprintOverview({ dashboard }) {
           <h3>Team Sprint Analytics</h3>
         </div>
         <div className="metric-grid">
+          <div className="metric-card"><div className="metric-label">Planned story points</div><div className="metric-value">{storyPoints?.planned ?? '—'}</div></div>
+          <div className="metric-card"><div className="metric-label">Completed story points (to date)</div><div className="metric-value">{storyPoints?.completedToDate ?? '—'}</div></div>
+          <div className="metric-card">
+            <div className="metric-label">
+              Velocity (previous sprint){storyPoints?.previousSprintName ? ` · ${storyPoints.previousSprintName}` : ''}
+            </div>
+            <div className="metric-value">{storyPoints?.velocityPreviousSprint ?? '—'}</div>
+          </div>
           <div className="metric-card"><div className="metric-label">Working days elapsed</div><div className="metric-value">{teamMetrics?.elapsedWorkingDays}/{teamMetrics?.totalWorkingDays}</div></div>
           <div className="metric-card"><div className="metric-label">Working days remaining</div><div className="metric-value">{teamMetrics?.remainingWorkingDays ?? '—'}</div></div>
           <div className="metric-card"><div className="metric-label">Active contributors</div><div className="metric-value">{teamMetrics?.contributorsActive ?? '—'}</div></div>
