@@ -198,6 +198,7 @@ export default function SprintOverview({ dashboard }) {
           <div className="metric-card"><div className="metric-label">Remaining today</div><div className="metric-value">{teamMetrics?.remainingToday == null ? '—' : `${fmt(teamMetrics?.remainingToday)}h`}</div></div>
           <div className="metric-card"><div className="metric-label">Burn efficiency</div><div className="metric-value">{pct(teamMetrics?.burnEfficiencyPct)}</div></div>
           <div className="metric-card"><div className="metric-label">Scope added to date</div><div className="metric-value">{fmt(teamMetrics?.scopeAddedToDate)}h</div></div>
+          <div className="metric-card"><div className="metric-label">Scope removed to date</div><div className="metric-value">{fmt(teamMetrics?.scopeRemovedToDate)}h</div></div>
           <div className="metric-card"><div className="metric-label">Worked outside sprint</div><div className="metric-value">{fmt(offSprintWork?.totals?.worked)}h</div></div>
           <div className="metric-card"><div className="metric-label">Outside-sprint tasks worked</div><div className="metric-value">{offSprintWork?.totals?.taskCount || 0}</div></div>
           {offSprintWork?.skippedOnDayOne && (

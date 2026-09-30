@@ -94,6 +94,14 @@ function betweenDays(key, start, end) {
   return key >= start && key <= end;
 }
 
+// True when an iteration path equals the base path or is nested beneath it.
+// Compares on the separator so "Sprint 1" does not match "Sprint 10".
+function isUnderPath(path, base) {
+  if (!path || !base) return false;
+  if (path === base) return true;
+  return path.startsWith(base.endsWith('\\') ? base : `${base}\\`);
+}
+
 const esc = (s) => String(s).replace(/'/g, "''");
 
 // Build a WIQL predicate that limits a query to a team's configured area paths.
@@ -132,6 +140,8 @@ function summarizeRevisions(revisions) {
       completed: num(f[F.completed]),
       remaining: num(f[F.remaining]),
       assignee: personName(f[F.assignedTo]),
+      state: (f[F.state] || '').toLowerCase(),
+      iterationPath: f[F.iterationPath] || '',
     });
   }
   points.sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -293,6 +303,10 @@ export async function buildDashboard(team, iterationId, options = {}) {
   let offSprintItems = [];
   const offSprintByPerson = {};
 
+  // Hours that left the sprint, keyed by day. Filled from two sources:
+  // tasks set to a Removed/Cut state, and tasks moved to another iteration.
+  const dailyScopeRemoved = {};
+
   // Skip off-sprint watch on day 1 of sprint planning updates.
   const watchDayActive = asOfDay && workingDays.filter((d) => d <= asOfDay).length > 1;
   const shouldComputeOffSprint = enableOffSprintWatch && watchDayActive && (!chunkMode || chunkOffset === 0);
@@ -328,6 +342,7 @@ export async function buildDashboard(team, iterationId, options = {}) {
       let totalBurned = 0;
       let prevCompleted = 0;
       let prevRemaining = null;
+      let prevIterationPath = null;
 
       for (const p of t.points) {
         const key = dateKey(p.date);
@@ -374,6 +389,24 @@ export async function buildDashboard(team, iterationId, options = {}) {
             slot[t.id].burned += burn;
           }
         }
+
+        // Scope removed: the task was moved out of the sprint iteration
+        // mid-sprint. The Remaining Work it carried at that moment is the
+        // scope that left.
+        if (
+          inSprintWindow
+          && prevIterationPath !== null
+          && isUnderPath(prevIterationPath, iteration.path)
+          && !isUnderPath(p.iterationPath, iteration.path)
+        ) {
+          const lost = num(prevRemaining);
+          if (lost > 0) {
+            (dailyScopeRemoved[key] ||= 0);
+            dailyScopeRemoved[key] += lost;
+          }
+        }
+
+        prevIterationPath = p.iterationPath;
         prevRemaining = p.remaining;
       }
 
@@ -458,6 +491,7 @@ export async function buildDashboard(team, iterationId, options = {}) {
   for (const t of revisionsByTask) {
     let prevCompleted = 0;
     let prevRemaining = null;
+    let prevState = null;
     for (const p of t.points) {
       if (asOfDay && dateKey(p.date) <= asOfDay) {
         if (!personTaskTouches[p.assignee]) personTaskTouches[p.assignee] = new Set();
@@ -489,6 +523,19 @@ export async function buildDashboard(team, iterationId, options = {}) {
           dailyScopeAdded[key] += add;
         }
       }
+
+      // Scope removed: the task was cut from the sprint by moving to a
+      // Removed/Cut state. Credit the Remaining Work it still carried.
+      if (prevState !== null && !REMOVED_STATES.has(prevState) && REMOVED_STATES.has(p.state)) {
+        const lost = num(prevRemaining);
+        if (lost > 0) {
+          const key = dateKey(p.date);
+          (dailyScopeRemoved[key] ||= 0);
+          dailyScopeRemoved[key] += lost;
+        }
+      }
+
+      prevState = p.state;
       prevRemaining = p.remaining;
     }
   }
@@ -646,6 +693,11 @@ export async function buildDashboard(team, iterationId, options = {}) {
       .filter(([day]) => day >= sprintStart && day <= today)
       .reduce((s, [, hrs]) => s + num(hrs), 0),
   );
+  const scopeRemovedToDate = round(
+    Object.entries(dailyScopeRemoved)
+      .filter(([day]) => day >= sprintStart && day <= today)
+      .reduce((s, [, hrs]) => s + num(hrs), 0),
+  );
 
   const teamMetrics = {
     elapsedWorkingDays,
@@ -661,6 +713,7 @@ export async function buildDashboard(team, iterationId, options = {}) {
     utilizationPct: pct(teamWorkedToDate, teamCapacityToDate),
     burnEfficiencyPct: pct(teamBurnedToDate, teamWorkedToDate),
     scopeAddedToDate,
+    scopeRemovedToDate,
     generatedThrough: asOfDay,
   };
 
