@@ -151,6 +151,33 @@ function existsAsOf(points, dayKey) {
   return points.length > 0 && dateKey(points[0].date) <= dayKey;
 }
 
+// Sum story points for User Story/PBI/Requirement type items under a given
+// iteration path, scoped to the team's area path(s). Returns planned
+// (all non-removed stories) and completedToDate (Done/Closed/etc. stories).
+async function fetchStoryPoints(iterationPath, taskArea) {
+  if (!iterationPath) return { planned: 0, completedToDate: 0 };
+  const typeClause = Array.from(STORY_TYPES).map((t) => `[System.WorkItemType] = '${esc(t)}'`).join(' OR ');
+  const query =
+    `SELECT [System.Id] FROM WorkItems WHERE (${typeClause}) ` +
+    `AND [System.IterationPath] UNDER '${esc(iterationPath)}'` +
+    (taskArea ? ` AND ${taskArea}` : '');
+  const res = await wiql(query);
+  const ids = (res.workItems || []).map((w) => w.id);
+  if (!ids.length) return { planned: 0, completedToDate: 0 };
+  const items = await getWorkItemsBatch(ids, [F.state, F.storyPoints]);
+  let planned = 0;
+  let completedToDate = 0;
+  for (const it of items) {
+    const f = it.fields || {};
+    const state = (f[F.state] || '').toLowerCase();
+    if (REMOVED_STATES.has(state)) continue;
+    const pts = num(f[F.storyPoints]);
+    planned += pts;
+    if (COMPLETED_STATES.has(state)) completedToDate += pts;
+  }
+  return { planned: round(planned), completedToDate: round(completedToDate) };
+}
+
 // --- main dashboard ------------------------------------------------------
 
 export async function buildDashboard(team, iterationId, options = {}) {
@@ -211,7 +238,20 @@ export async function buildDashboard(team, iterationId, options = {}) {
     `SELECT [System.Id] FROM WorkItems WHERE [System.WorkItemType] = 'Task' ` +
     `AND [System.IterationPath] UNDER '${esc(iteration.path)}'` +
     (taskArea ? ` AND ${taskArea}` : '');
-  const taskRes = await wiql(taskQuery);
+
+  // Previous sprint (by start date) relative to the selected iteration, used
+  // to report last sprint's velocity in completed story points. Only computed
+  // for the first chunk (or in non-chunked mode), same as capacityDiag/offSprintWork.
+  const sortedIterations = [...iterations].sort((a, b) => new Date(a.startDate || 0) - new Date(b.startDate || 0));
+  const currentIterationIdx = sortedIterations.findIndex((it) => it.id === iteration.id);
+  const previousIteration = currentIterationIdx > 0 ? sortedIterations[currentIterationIdx - 1] : null;
+  const shouldComputeStoryPoints = !chunkMode || chunkOffset === 0;
+
+  const [taskRes, currentStoryPoints, previousStoryPoints] = await Promise.all([
+    wiql(taskQuery),
+    shouldComputeStoryPoints ? fetchStoryPoints(iteration.path, taskArea) : Promise.resolve({ planned: 0, completedToDate: 0 }),
+    shouldComputeStoryPoints && previousIteration ? fetchStoryPoints(previousIteration.path, taskArea) : Promise.resolve(null),
+  ]);
   const taskIds = (taskRes.workItems || []).map((w) => w.id);
   const today = dateKey(new Date());
   const asOfDay = [...workingDays].reverse().find((d) => d <= today) || null;
@@ -630,6 +670,12 @@ export async function buildDashboard(team, iterationId, options = {}) {
     dailyHours,
     capacityDiag,
     teamMetrics,
+    storyPoints: {
+      planned: currentStoryPoints.planned,
+      completedToDate: currentStoryPoints.completedToDate,
+      velocityPreviousSprint: previousIteration ? (previousStoryPoints?.completedToDate ?? null) : null,
+      previousSprintName: previousIteration?.name || null,
+    },
     offSprintWork: {
       totals: offSprintTotals,
       byPerson: offSprintPeople,
