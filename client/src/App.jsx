@@ -14,11 +14,15 @@ export default function App() {
   const [progress, setProgress] = useState(null);
   const [error, setError] = useState(null);
 
-  // Restore an existing server session (e.g. after a page refresh in dev).
+  // Restore the browser-session connection (e.g. after a page refresh).
   useEffect(() => {
-    api.status().then((s) => {
-      if (s.connected) api.teams?.().catch(() => {});
-    }).catch(() => {});
+    const saved = api.credentials();
+    if (!saved?.org) return;
+    api.teams()
+      .then(({ teams }) => {
+        if (teams?.length) setConn({ org: saved.org, project: saved.project, teams });
+      })
+      .catch(() => api.clearCredentials());
   }, []);
 
   async function onReady(res, teamName) {
