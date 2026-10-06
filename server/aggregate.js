@@ -27,6 +27,11 @@ const COMPLETED_STATES = new Set(['done', 'closed', 'completed', 'resolved']);
 const REMOVED_STATES = new Set(['removed', 'cut']);
 const STORY_TYPES = new Set(['user story', 'product backlog item', 'requirement']);
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+// An impeded task counts as stale once it has gone this many whole days
+// without any edit to the work item.
+const DEFAULT_STALE_IMPEDIMENT_DAYS = 2;
+
 // --- helpers -------------------------------------------------------------
 
 const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
@@ -193,6 +198,9 @@ export async function buildDashboard(client, team, iterationId, options = {}) {
   const chunkLimit = Number.isFinite(options.taskLimit) ? Math.max(1, Math.floor(options.taskLimit)) : null;
   const chunkMode = Number.isFinite(chunkLimit);
   const enableOffSprintWatch = options.enableOffSprintWatch !== false;
+  const staleImpedimentDays = Number.isFinite(options.staleImpedimentDays)
+    ? Math.max(0, Math.floor(options.staleImpedimentDays))
+    : DEFAULT_STALE_IMPEDIMENT_DAYS;
 
   const iterations = await client.getIterations(team);
   const iteration = iterations.find((it) => it.id === iterationId) || iterations[0];
@@ -260,7 +268,9 @@ export async function buildDashboard(client, team, iterationId, options = {}) {
   const sprintStart = workingDays[0] || dateKey(iteration.startDate);
   const sprintEnd = workingDays[workingDays.length - 1] || dateKey(iteration.finishDate);
   const selectedTaskIds = chunkMode ? taskIds.slice(chunkOffset, chunkOffset + chunkLimit) : taskIds;
-  const taskItems = selectedTaskIds.length ? await client.getWorkItemsBatch(selectedTaskIds, [F.title, F.assignedTo, F.remaining]) : [];
+  const taskItems = selectedTaskIds.length
+    ? await client.getWorkItemsBatch(selectedTaskIds, [F.title, F.assignedTo, F.remaining, F.changedDate])
+    : [];
   const taskTitleById = new Map(taskItems.map((w) => [w.id, w.fields?.[F.title] || `Task ${w.id}`]));
   const taskIdSet = new Set(selectedTaskIds);
   let taskboardItems = [];
@@ -275,12 +285,40 @@ export async function buildDashboard(client, team, iterationId, options = {}) {
       .map((item) => taskboardId(item))
       .filter((id) => id && taskIdSet.has(id)),
   );
+  // Impeded tasks, plus the ones that have gone stale. A task counts as stale
+  // when nobody has touched the work item for `staleImpedimentDays` whole days
+  // -- an impediment nobody is updating is the one most likely to be forgotten.
+  // Staleness uses elapsed time rather than calendar-day bucketing so a task
+  // edited an hour ago never reads as a day old.
   const impededHoursByPerson = {};
+  const impededCountByPerson = {};
+  const staleImpededByPerson = {};
+  const staleImpededTasksByPerson = {};
+  const nowMs = Date.now();
   for (const t of taskItems) {
     if (!impededTaskIds.has(t.id)) continue;
     const f = t.fields || {};
     const assignee = personName(f[F.assignedTo]);
-    impededHoursByPerson[assignee] = round(num(impededHoursByPerson[assignee]) + num(f[F.remaining]));
+    const remaining = num(f[F.remaining]);
+    impededHoursByPerson[assignee] = round(num(impededHoursByPerson[assignee]) + remaining);
+    impededCountByPerson[assignee] = (impededCountByPerson[assignee] || 0) + 1;
+
+    const changedRaw = f[F.changedDate];
+    const changedMs = changedRaw ? new Date(changedRaw).getTime() : NaN;
+    if (!Number.isFinite(changedMs)) continue;
+    const daysSinceUpdate = Math.floor((nowMs - changedMs) / DAY_MS);
+    if (daysSinceUpdate < staleImpedimentDays) continue;
+    staleImpededByPerson[assignee] = (staleImpededByPerson[assignee] || 0) + 1;
+    (staleImpededTasksByPerson[assignee] ||= []).push({
+      id: t.id,
+      title: f[F.title] || `Task ${t.id}`,
+      remaining: round(remaining),
+      daysSinceUpdate,
+      changedDate: changedRaw,
+    });
+  }
+  for (const list of Object.values(staleImpededTasksByPerson)) {
+    list.sort((a, b) => (b.daysSinceUpdate - a.daysSinceUpdate) || (b.remaining - a.remaining));
   }
 
   const revisionTaskIds = selectedTaskIds.slice(0, Math.min(selectedTaskIds.length, maxTasksForRevisions));
@@ -445,12 +483,17 @@ export async function buildDashboard(client, team, iterationId, options = {}) {
     if (!people.has(name)) people.set(name, { name, capacityPerDay: 0, daysOff: [] });
   }
 
+  // Someone whose only footprint this sprint is a blocked task still needs a
+  // row, otherwise their impediment would be invisible.
+  for (const name of Object.keys(impededCountByPerson)) {
+    if (!people.has(name)) people.set(name, { name, capacityPerDay: 0, daysOff: [] });
+  }
+
   // Ensure every assignee that logged work appears as a person row.
   for (const t of revisionsByTask) {
     for (const p of t.points) {
       if (!people.has(p.assignee)) people.set(p.assignee, { name: p.assignee, capacityPerDay: 0, daysOff: [] });
-    }
-  }
+    }  }
 
   // --- Daily hours per person (completed-work deltas attributed to assignee) ---
   // dailyWorked[dayKey][person] = hours logged that day.
@@ -639,6 +682,9 @@ export async function buildDashboard(client, team, iterationId, options = {}) {
       const remainingToday = asOfDay ? round(asOfPersonRemaining[p.name] || 0) : 0;
       const completedToDate = asOfDay ? round(asOfPersonCompleted[p.name] || 0) : 0;
       const impededToday = round(impededHoursByPerson[p.name] || 0);
+      const impededTaskCount = impededCountByPerson[p.name] || 0;
+      const staleImpededCount = staleImpededByPerson[p.name] || 0;
+      const staleImpededTasks = staleImpededTasksByPerson[p.name] || [];
       const tasksTouched = (personTaskTouches[p.name] && personTaskTouches[p.name].size) || 0;
       const avgWorkedPerDay = elapsedWorkingDays > 0 ? round(workedToDate / elapsedWorkingDays) : 0;
       const avgBurnedPerDay = elapsedWorkingDays > 0 ? round(burnedToDate / elapsedWorkingDays) : 0;
@@ -651,6 +697,9 @@ export async function buildDashboard(client, team, iterationId, options = {}) {
         burnedToDate,
         completedToDate,
         impededToday,
+        impededTaskCount,
+        staleImpededCount,
+        staleImpededTasks,
         remainingToday,
         capacityToDate,
         utilizationPct,
@@ -668,6 +717,7 @@ export async function buildDashboard(client, team, iterationId, options = {}) {
         || p.workedToDate > 0
         || p.burnedToDate > 0
         || p.remainingToday > 0
+        || p.impededTaskCount > 0
         || offSprintPeopleWithWorked.has(p.name),
     )
     .sort((a, b) => {
@@ -706,6 +756,9 @@ export async function buildDashboard(client, team, iterationId, options = {}) {
     burnEfficiencyPct: pct(teamBurnedToDate, teamWorkedToDate),
     scopeAddedToDate,
     scopeRemovedToDate,
+    staleImpedimentDays,
+    staleImpededCount: personMetrics.reduce((s, p) => s + p.staleImpededCount, 0),
+    impededTaskCount: personMetrics.reduce((s, p) => s + p.impededTaskCount, 0),
     generatedThrough: asOfDay,
   };
 

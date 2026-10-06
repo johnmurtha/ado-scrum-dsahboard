@@ -95,7 +95,7 @@ function normalizeActivity(map) {
   );
 }
 
-function mergeDashboardChunks(chunks) {
+export function mergeDashboardChunks(chunks) {
   const first = chunks[0];
   const days = first.workingDays || [];
   const today = new Date().toISOString().slice(0, 10);
@@ -106,6 +106,9 @@ function mergeDashboardChunks(chunks) {
 
   const people = {};
   const impededByPerson = {};
+  const impededCountByPerson = {};
+  const staleImpededByPerson = {};
+  const staleImpededTasksByPerson = {};
   const touchesByPerson = {};
   const teamByDay = {};
   const personRemainingByDay = {};
@@ -139,6 +142,11 @@ function mergeDashboardChunks(chunks) {
 
     for (const p of c.personMetrics || []) {
       impededByPerson[p.name] = round((impededByPerson[p.name] || 0) + (p.impededToday || 0));
+      impededCountByPerson[p.name] = (impededCountByPerson[p.name] || 0) + (p.impededTaskCount || 0);
+      staleImpededByPerson[p.name] = (staleImpededByPerson[p.name] || 0) + (p.staleImpededCount || 0);
+      if (p.staleImpededTasks?.length) {
+        (staleImpededTasksByPerson[p.name] ||= []).push(...p.staleImpededTasks);
+      }
       touchesByPerson[p.name] = (touchesByPerson[p.name] || 0) + (p.tasksTouched || 0);
     }
 
@@ -232,6 +240,11 @@ function mergeDashboardChunks(chunks) {
         burnedToDate,
         completedToDate,
         impededToday: round(impededByPerson[p.name] || 0),
+        impededTaskCount: impededCountByPerson[p.name] || 0,
+        staleImpededCount: staleImpededByPerson[p.name] || 0,
+        staleImpededTasks: (staleImpededTasksByPerson[p.name] || [])
+          .slice()
+          .sort((a, b) => (b.daysSinceUpdate - a.daysSinceUpdate) || (b.remaining - a.remaining)),
         remainingToday,
         capacityToDate,
         utilizationPct: pct(workedToDate, capacityToDate),
@@ -244,7 +257,7 @@ function mergeDashboardChunks(chunks) {
         tasksTouched: touchesByPerson[p.name] || 0,
       };
     })
-    .filter((p) => p.capacityPerDay > 0 || p.workedToDate > 0 || p.burnedToDate > 0 || p.remainingToday > 0)
+    .filter((p) => p.capacityPerDay > 0 || p.workedToDate > 0 || p.burnedToDate > 0 || p.remainingToday > 0 || p.impededTaskCount > 0)
     .sort((a, b) => (b.burnedToDate - a.burnedToDate) || a.name.localeCompare(b.name));
 
   const teamWorkedToDate = round(personMetrics.reduce((s, p) => s + p.workedToDate, 0));
@@ -265,6 +278,9 @@ function mergeDashboardChunks(chunks) {
     burnEfficiencyPct: pct(teamBurnedToDate, teamWorkedToDate),
     scopeAddedToDate: round(scopeAddedToDate),
     scopeRemovedToDate: round(scopeRemovedToDate),
+    staleImpedimentDays: first.teamMetrics?.staleImpedimentDays ?? 2,
+    staleImpededCount: personMetrics.reduce((s, p) => s + (p.staleImpededCount || 0), 0),
+    impededTaskCount: personMetrics.reduce((s, p) => s + (p.impededTaskCount || 0), 0),
     generatedThrough: asOfDay,
   };
 

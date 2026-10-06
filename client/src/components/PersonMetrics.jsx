@@ -18,6 +18,9 @@ export default function PersonMetrics({ metrics }) {
         'Burned to date',
         'Remaining today',
         'Completed to date',
+        'Impeded hours',
+        'Impeded tasks',
+        'Stale impeded tasks',
         'Utilization %',
         'Burn efficiency %',
         'Avg worked/day',
@@ -35,6 +38,9 @@ export default function PersonMetrics({ metrics }) {
         p.burnedToDate,
         p.remainingToday,
         p.completedToDate,
+        p.impededToday,
+        p.impededTaskCount ?? 0,
+        p.staleImpededCount ?? 0,
         p.utilizationPct == null ? '' : p.utilizationPct,
         p.burnEfficiencyPct == null ? '' : p.burnEfficiencyPct,
         p.avgWorkedPerDay,
@@ -66,6 +72,8 @@ export default function PersonMetrics({ metrics }) {
               <th className="num">Burned</th>
               <th className="num">Remaining</th>
               <th className="num">Completed</th>
+              <th className="num">Impeded</th>
+              <th className="num">Stale imp.</th>
               <th className="num">Util %</th>
               <th className="num">Burn eff %</th>
               <th className="num">Avg worked/day</th>
@@ -86,6 +94,10 @@ export default function PersonMetrics({ metrics }) {
                 <td className="num">{p.burnedToDate}</td>
                 <td className="num">{p.remainingToday}</td>
                 <td className="num">{p.completedToDate}</td>
+                <td className="num">{p.impededToday}</td>
+                <td className={`num ${(p.staleImpededCount || 0) > 0 ? 'eff-over' : ''}`}>
+                  {p.staleImpededCount ?? 0}
+                </td>
                 <td className="num">{fmtPct(p.utilizationPct)}</td>
                 <td className="num">{fmtPct(p.burnEfficiencyPct)}</td>
                 <td className="num">{p.avgWorkedPerDay}</td>
@@ -98,7 +110,7 @@ export default function PersonMetrics({ metrics }) {
                 <td className="num">{p.tasksTouched}</td>
               </tr>
             ))}
-            {!metrics.length && <tr><td colSpan={15} className="muted center">No person metrics found.</td></tr>}
+            {!metrics.length && <tr><td colSpan={17} className="muted center">No person metrics found.</td></tr>}
           </tbody>
         </table>
       </div>

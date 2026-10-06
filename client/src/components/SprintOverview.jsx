@@ -33,11 +33,18 @@ function isUnassigned(name) {
   return String(name || '').trim().toLowerCase() === 'unassigned';
 }
 
-function PersonSprintCard({ person }) {
+function PersonSprintCard({ person, staleDays }) {
   const [hoverIndex, setHoverIndex] = useState(null);
   const hovered = hoverIndex == null ? null : person.series[hoverIndex] || null;
   const taskRows = hovered?.tasks || [];
   const offSprintRows = hovered?.offSprintTasks || [];
+  const staleCount = person.metrics.staleImpededCount || 0;
+  const staleTasks = person.metrics.staleImpededTasks || [];
+  const staleTitle = staleCount
+    ? `Impeded tasks with no update in ${staleDays}+ days:\n${staleTasks
+      .map((t) => `#${t.id} ${t.title} — ${t.daysSinceUpdate}d since update`)
+      .join('\n')}`
+    : `No impeded tasks have gone ${staleDays}+ days without an update.`;
 
   return (
     <div className="person-card">
@@ -51,6 +58,10 @@ function PersonSprintCard({ person }) {
         <div><span className="muted">Worked</span><strong>{fmt(person.metrics.workedToDate)}h</strong></div>
         <div><span className="muted">Burned</span><strong>{fmt(person.metrics.burnedToDate)}h</strong></div>
         <div><span className="muted">Impeded</span><strong>{fmt(person.metrics.impededToday)}h</strong></div>
+        <div className={staleCount > 0 ? 'stale-impediment' : ''} title={staleTitle}>
+          <span className="muted">Stale ≥{staleDays}d</span>
+          <strong>{staleCount}</strong>
+        </div>
         <div><span className="muted">Remaining</span><strong>{person.metrics.remainingToday == null ? '—' : `${fmt(person.metrics.remainingToday)}h`}</strong></div>
         <div><span className="muted">Completed</span><strong>{fmt(person.metrics.completedToDate)}h</strong></div>
         <div><span className="muted">Avg worked/day</span><strong>{fmt(person.metrics.avgWorkedPerDay)}h</strong></div>
@@ -127,6 +138,7 @@ export default function SprintOverview({ dashboard }) {
     offSprintDayTaskActivity,
     storyPoints,
   } = dashboard;
+  const staleImpedimentDays = teamMetrics?.staleImpedimentDays ?? 2;
   const teamLineData = useMemo(() => {
     const base = burndown?.team || [];
     const dayCapacity = (dashboard.workingDays || []).map((_, i) =>
@@ -257,7 +269,7 @@ export default function SprintOverview({ dashboard }) {
         </div>
         <div className="person-card-grid">
           {peopleCards.map((p) => (
-            <PersonSprintCard key={p.name} person={p} />
+            <PersonSprintCard key={p.name} person={p} staleDays={staleImpedimentDays} />
           ))}
           {!peopleCards.length && (
             <div className="muted">No person sprint metrics available for this team/iteration yet.</div>
