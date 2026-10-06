@@ -45,8 +45,8 @@ export default function ConnectionForm({ onReady }) {
         <form className="card connect-card" onSubmit={connect}>
           <h1>ADO Scrum Dashboard</h1>
           <p className="muted">
-            Connect with an Azure DevOps Personal Access Token. The PAT is held only in the
-            local server's memory for this session and never written to disk.
+            Connect with an Azure DevOps Personal Access Token. The PAT stays in this
+            browser session and is sent with each request; the server never stores it.
           </p>
 
           <label>

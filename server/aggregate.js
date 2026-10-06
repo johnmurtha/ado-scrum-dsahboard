@@ -2,17 +2,9 @@
 // metrics the dashboard needs. Hours are reconstructed from native
 // Completed/Remaining Work fields via each Task's revision history.
 
-import {
-  getIterations,
-  getTeamSettings,
-  getTeamFieldValues,
-  getCapacities,
-  getTeamDaysOff,
-  getTaskboardWorkItems,
-  wiql,
-  getWorkItemsBatch,
-  getRevisions,
-} from './adoClient.js';
+// All ADO access goes through a per-request `client` built by
+// `makeClient()` in adoClient.js. Nothing here touches shared/global
+// credential state, so concurrent requests stay fully isolated.
 
 const F = {
   type: 'System.WorkItemType',
@@ -164,17 +156,17 @@ function existsAsOf(points, dayKey) {
 // Sum story points for User Story/PBI/Requirement type items under a given
 // iteration path, scoped to the team's area path(s). Returns planned
 // (all non-removed stories) and completedToDate (Done/Closed/etc. stories).
-async function fetchStoryPoints(iterationPath, taskArea) {
+async function fetchStoryPoints(client, iterationPath, taskArea) {
   if (!iterationPath) return { planned: 0, completedToDate: 0 };
   const typeClause = Array.from(STORY_TYPES).map((t) => `[System.WorkItemType] = '${esc(t)}'`).join(' OR ');
   const query =
     `SELECT [System.Id] FROM WorkItems WHERE (${typeClause}) ` +
     `AND [System.IterationPath] UNDER '${esc(iterationPath)}'` +
     (taskArea ? ` AND ${taskArea}` : '');
-  const res = await wiql(query);
+  const res = await client.wiql(query);
   const ids = (res.workItems || []).map((w) => w.id);
   if (!ids.length) return { planned: 0, completedToDate: 0 };
-  const items = await getWorkItemsBatch(ids, [F.state, F.storyPoints]);
+  const items = await client.getWorkItemsBatch(ids, [F.state, F.storyPoints]);
   let planned = 0;
   let completedToDate = 0;
   for (const it of items) {
@@ -190,7 +182,7 @@ async function fetchStoryPoints(iterationPath, taskArea) {
 
 // --- main dashboard ------------------------------------------------------
 
-export async function buildDashboard(team, iterationId, options = {}) {
+export async function buildDashboard(client, team, iterationId, options = {}) {
   const maxTasksForRevisions = Number.isFinite(options.maxTasksForRevisions)
     ? Math.max(1, Math.floor(options.maxTasksForRevisions))
     : Infinity;
@@ -202,7 +194,7 @@ export async function buildDashboard(team, iterationId, options = {}) {
   const chunkMode = Number.isFinite(chunkLimit);
   const enableOffSprintWatch = options.enableOffSprintWatch !== false;
 
-  const iterations = await getIterations(team);
+  const iterations = await client.getIterations(team);
   const iteration = iterations.find((it) => it.id === iterationId) || iterations[0];
   if (!iteration) throw new Error('No iterations found for this team.');
   if (!iteration.startDate || !iteration.finishDate) {
@@ -210,10 +202,10 @@ export async function buildDashboard(team, iterationId, options = {}) {
   }
 
   const [settings, capacities, teamDaysOff, teamField] = await Promise.all([
-    getTeamSettings(team),
-    getCapacities(team, iteration.id),
-    getTeamDaysOff(team, iteration.id),
-    getTeamFieldValues(team),
+    client.getTeamSettings(team),
+    client.getCapacities(team, iteration.id),
+    client.getTeamDaysOff(team, iteration.id),
+    client.getTeamFieldValues(team),
   ]);
 
   const workingDayNames = new Set((settings.workingDays || []).map((w) => w.toLowerCase()));
@@ -258,9 +250,9 @@ export async function buildDashboard(team, iterationId, options = {}) {
   const shouldComputeStoryPoints = !chunkMode || chunkOffset === 0;
 
   const [taskRes, currentStoryPoints, previousStoryPoints] = await Promise.all([
-    wiql(taskQuery),
-    shouldComputeStoryPoints ? fetchStoryPoints(iteration.path, taskArea) : Promise.resolve({ planned: 0, completedToDate: 0 }),
-    shouldComputeStoryPoints && previousIteration ? fetchStoryPoints(previousIteration.path, taskArea) : Promise.resolve(null),
+    client.wiql(taskQuery),
+    shouldComputeStoryPoints ? fetchStoryPoints(client, iteration.path, taskArea) : Promise.resolve({ planned: 0, completedToDate: 0 }),
+    shouldComputeStoryPoints && previousIteration ? fetchStoryPoints(client, previousIteration.path, taskArea) : Promise.resolve(null),
   ]);
   const taskIds = (taskRes.workItems || []).map((w) => w.id);
   const today = dateKey(new Date());
@@ -268,12 +260,12 @@ export async function buildDashboard(team, iterationId, options = {}) {
   const sprintStart = workingDays[0] || dateKey(iteration.startDate);
   const sprintEnd = workingDays[workingDays.length - 1] || dateKey(iteration.finishDate);
   const selectedTaskIds = chunkMode ? taskIds.slice(chunkOffset, chunkOffset + chunkLimit) : taskIds;
-  const taskItems = selectedTaskIds.length ? await getWorkItemsBatch(selectedTaskIds, [F.title, F.assignedTo, F.remaining]) : [];
+  const taskItems = selectedTaskIds.length ? await client.getWorkItemsBatch(selectedTaskIds, [F.title, F.assignedTo, F.remaining]) : [];
   const taskTitleById = new Map(taskItems.map((w) => [w.id, w.fields?.[F.title] || `Task ${w.id}`]));
   const taskIdSet = new Set(selectedTaskIds);
   let taskboardItems = [];
   try {
-    taskboardItems = await getTaskboardWorkItems(team, iteration.id);
+    taskboardItems = await client.getTaskboardWorkItems(team, iteration.id);
   } catch (e) {
     console.warn(`[impeded] taskboard read failed: ${e.message}`);
   }
@@ -295,7 +287,7 @@ export async function buildDashboard(team, iterationId, options = {}) {
   const revisionsByTask = await pool(
     revisionTaskIds,
     6,
-    async (id) => ({ id, points: summarizeRevisions(await getRevisions(id)) }),
+    async (id) => ({ id, points: summarizeRevisions(await client.getRevisions(id)) }),
   );
   const revisionsTruncated = revisionTaskIds.length < taskIds.length;
 
@@ -320,19 +312,19 @@ export async function buildDashboard(team, iterationId, options = {}) {
       `AND NOT [System.IterationPath] UNDER '${esc(iteration.path)}'` +
       (taskArea ? ` AND ${taskArea}` : '') +
       ` ORDER BY [System.ChangedDate] DESC`;
-    const outSprintRes = await wiql(outSprintQuery);
+    const outSprintRes = await client.wiql(outSprintQuery);
     const outSprintIds = Array.from(
       new Set((outSprintRes.workItems || []).map((w) => w.id).filter((id) => !taskIdSet.has(id))),
     );
     const selectedOutSprintIds = outSprintIds.slice(0, Math.min(outSprintIds.length, maxOffSprintTasks));
     const outSprintItemsRaw = selectedOutSprintIds.length
-      ? await getWorkItemsBatch(selectedOutSprintIds, [F.title, F.iterationPath])
+      ? await client.getWorkItemsBatch(selectedOutSprintIds, [F.title, F.iterationPath])
       : [];
     const outSprintById = new Map(outSprintItemsRaw.map((w) => [w.id, w.fields || {}]));
     const outSprintRevisions = await pool(
       selectedOutSprintIds,
       4,
-      async (id) => ({ id, points: summarizeRevisions(await getRevisions(id)) }),
+      async (id) => ({ id, points: summarizeRevisions(await client.getRevisions(id)) }),
     );
 
     for (const t of outSprintRevisions) {
@@ -802,8 +794,8 @@ export async function buildDashboard(team, iterationId, options = {}) {
 
 // --- feature status ------------------------------------------------------
 
-export async function buildFeatures(team, iterationId) {
-  const [iterations, teamField] = await Promise.all([getIterations(team), getTeamFieldValues(team)]);
+export async function buildFeatures(client, team, iterationId) {
+  const [iterations, teamField] = await Promise.all([client.getIterations(team), client.getTeamFieldValues(team)]);
   const iteration = iterations.find((it) => it.id === iterationId) || null;
   const iterationPath = iteration?.path || null;
 
@@ -814,7 +806,7 @@ export async function buildFeatures(team, iterationId) {
     `SELECT [System.Id] FROM WorkItemLinks WHERE ([Source].[System.WorkItemType] = 'Feature') ` +
     (sourceArea ? `AND (${sourceArea}) ` : '') +
     `AND ([System.Links.LinkType] = 'System.LinkTypes.Hierarchy-Forward') MODE (Recursive)`;
-  const linkRes = await wiql(linkQuery);
+  const linkRes = await client.wiql(linkQuery);
   const rels = linkRes.workItemRelations || [];
 
   const childrenOf = new Map();
@@ -830,7 +822,7 @@ export async function buildFeatures(team, iterationId) {
     }
   }
 
-  const items = await getWorkItemsBatch(Array.from(ids), [
+  const items = await client.getWorkItemsBatch(Array.from(ids), [
     F.type, F.state, F.title, F.storyPoints, F.completed, F.remaining, F.targetDate, F.iterationPath,
     F.stackRank, F.backlogPriority, F.priority,
   ]);

@@ -1,8 +1,9 @@
 # ADO Sprint Analytics Dashboard
 
-A local, single-user dashboard for two Agile teams that manage work in Azure DevOps.
-Everything runs on your machine. You supply an ADO **Personal Access Token (PAT)** in the
-UI; it is kept only in the local server's memory for the session and is never written to disk.
+A dashboard for two Agile teams that manage work in Azure DevOps. You supply an ADO
+**Personal Access Token (PAT)** in the UI; it is held in your browser's `sessionStorage`
+for the tab's session and sent with each API request. The server stores **no** connection
+state between requests, so concurrent users never share credentials or data.
 
 ## What it shows
 
@@ -34,6 +35,39 @@ date of that revision. This is a solid approximation. Caveats:
 - Bulk edits or backfilled hours land on the edit date, not when the work happened.
 - If a Task is reassigned, past deltas stay with whoever was assigned at the time of each revision.
 - Times are bucketed by day in UTC.
+
+## Credentials and multi-user safety
+
+Every API request must carry its own credentials as headers:
+
+| Header | Value |
+| --- | --- |
+| `X-ADO-Org` | organization name (or full `https://dev.azure.com/...` URL) |
+| `X-ADO-Project` | project name |
+| `X-ADO-PAT` | personal access token |
+
+The server builds a fresh ADO client per request (`makeClient()` in `server/adoClient.js`)
+and holds the PAT only in that call's closure. There is no module-level or global
+connection state.
+
+This matters for the Cloudflare deployment: a Worker isolate serves many concurrent
+requests from different visitors and reuses its module scope between them. Storing the PAT
+in a module-level variable would let one user's request read or overwrite another's
+credentials. Per-request credentials remove that class of bug entirely.
+
+`POST /api/connect` is a stateless validation ping — it verifies the supplied credentials
+and returns the visible teams. It does not create a session. Disconnecting simply clears
+the credentials in the browser.
+
+**CORS is closed by default.** The client is served same-origin (or through the Vite dev
+proxy), so no cross-origin access is required. To allow another origin, set a
+comma-separated `ALLOWED_ORIGINS` (an env var for the Express server, a Worker var for
+Cloudflare).
+
+> **Note:** these headers authenticate to *Azure DevOps*, not to this app. A publicly
+> reachable deployment is still an open proxy that anyone can point at their own ADO org.
+> Put an access control layer (for example Cloudflare Access) in front of a public
+> deployment.
 
 ## Prerequisites
 
@@ -97,7 +131,7 @@ re-pull. Switching team or iteration reloads.
 ```
 server/
   index.js       Express app + routes + static hosting of the built client
-  adoClient.js   ADO REST client (auth, teams, iterations, capacity, WIQL, revisions)
+  adoClient.js   Per-request ADO REST client factory (auth, teams, iterations, capacity, WIQL, revisions)
   aggregate.js   Sprint metric reconstruction (daily hours, team/person metrics, burndowns)
 client/
   src/

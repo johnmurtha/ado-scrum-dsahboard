@@ -1,8 +1,54 @@
-// Tiny fetch wrapper for the local API.
+// Tiny fetch wrapper for the API.
+//
+// Credentials are held per-browser-session and sent as headers on every
+// request. The server keeps no connection state, so one user's PAT can never
+// leak into another user's request.
+const CREDS_KEY = 'ado-dashboard-creds';
+let creds = null;
+
+function loadCreds() {
+  if (creds) return creds;
+  try {
+    const raw = sessionStorage.getItem(CREDS_KEY);
+    if (raw) creds = JSON.parse(raw);
+  } catch {
+    /* sessionStorage unavailable */
+  }
+  return creds;
+}
+
+function setCredentials(next) {
+  creds = next;
+  try {
+    sessionStorage.setItem(CREDS_KEY, JSON.stringify(next));
+  } catch {
+    /* sessionStorage unavailable; keep in memory only */
+  }
+}
+
+function clearCredentials() {
+  creds = null;
+  try {
+    sessionStorage.removeItem(CREDS_KEY);
+  } catch {
+    /* sessionStorage unavailable */
+  }
+}
+
+function authHeaders() {
+  const c = loadCreds();
+  if (!c) return {};
+  return {
+    'X-ADO-Org': c.org,
+    'X-ADO-Project': c.project,
+    'X-ADO-PAT': c.pat,
+  };
+}
+
 async function call(method, url, body) {
   const res = await fetch(url, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
@@ -290,9 +336,22 @@ async function loadDashboardChunked(team, iterationId, onProgress) {
 }
 
 export const api = {
-  connect: (cfg) => call('POST', '/api/connect', cfg),
-  status: () => call('GET', '/api/status'),
-  disconnect: () => call('POST', '/api/disconnect'),
+  // Credentials live only in this browser session.
+  credentials: () => loadCreds(),
+  clearCredentials,
+  connect: async (cfg) => {
+    setCredentials(cfg);
+    try {
+      return await call('POST', '/api/connect');
+    } catch (err) {
+      clearCredentials();
+      throw err;
+    }
+  },
+  disconnect: async () => {
+    clearCredentials();
+    return { connected: false };
+  },
   teams: () => call('GET', '/api/teams'),
   iterations: (team) => call('GET', `/api/iterations?team=${encodeURIComponent(team)}`),
   dashboard: async (team, iterationId, onProgress) => {
