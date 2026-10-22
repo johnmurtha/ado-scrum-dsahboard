@@ -102,7 +102,7 @@ function PersonSprintCard({ person, staleDays }) {
             {taskRows.map((t) => (
               <li key={`${t.id}-${hovered.day}`}>
                 <span className="task-activity-name">#{t.id} {t.title}</span>
-                <span className="task-activity-hours">W {fmt(t.worked)}h · B {fmt(t.burned)}h</span>
+                <span className="task-activity-hours">W {fmt(t.worked)}h · B {fmt(t.burned)}h · R {t.remaining == null ? '—' : `${fmt(t.remaining)}h`}</span>
               </li>
             ))}
           </ul>
@@ -114,7 +114,7 @@ function PersonSprintCard({ person, staleDays }) {
                 <span className="task-activity-name">
                   #{t.id} {t.title}
                 </span>
-                <span className="task-activity-hours">W {fmt(t.worked)}h · B {fmt(t.burned)}h</span>
+                <span className="task-activity-hours">W {fmt(t.worked)}h · B {fmt(t.burned)}h · R {t.remaining == null ? '—' : `${fmt(t.remaining)}h`}</span>
               </li>
             ))}
           </ul>
