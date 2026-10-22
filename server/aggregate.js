@@ -30,7 +30,7 @@ const STORY_TYPES = new Set(['user story', 'product backlog item', 'requirement'
 const DAY_MS = 24 * 60 * 60 * 1000;
 // An impeded task counts as stale once it has gone MORE than this many
 // business days without any edit to the work item.
-const DEFAULT_STALE_IMPEDIMENT_DAYS = 2;
+const DEFAULT_STALE_IMPEDIMENT_DAYS = 1;
 
 // Elapsed time between two instants, in business days (fractional), skipping
 // any UTC calendar day for which isWorkingDay(key) is false (weekends, team

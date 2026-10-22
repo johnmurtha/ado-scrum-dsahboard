@@ -278,7 +278,7 @@ export function mergeDashboardChunks(chunks) {
     burnEfficiencyPct: pct(teamBurnedToDate, teamWorkedToDate),
     scopeAddedToDate: round(scopeAddedToDate),
     scopeRemovedToDate: round(scopeRemovedToDate),
-    staleImpedimentDays: first.teamMetrics?.staleImpedimentDays ?? 2,
+    staleImpedimentDays: first.teamMetrics?.staleImpedimentDays ?? 1,
     staleImpededCount: personMetrics.reduce((s, p) => s + (p.staleImpededCount || 0), 0),
     impededTaskCount: personMetrics.reduce((s, p) => s + (p.impededTaskCount || 0), 0),
     generatedThrough: asOfDay,
