@@ -346,6 +346,7 @@ export async function buildDashboard(client, team, iterationId, options = {}) {
   const revisionsTruncated = revisionTaskIds.length < taskIds.length;
 
   const offSprintDayTaskActivity = {};
+  const offSprintPointsById = new Map();
   let offSprintItems = [];
   const offSprintByPerson = {};
 
@@ -382,6 +383,7 @@ export async function buildDashboard(client, team, iterationId, options = {}) {
     );
 
     for (const t of outSprintRevisions) {
+      offSprintPointsById.set(t.id, t.points);
       const f = outSprintById.get(t.id) || {};
       const perPerson = {};
       let totalWorked = 0;
@@ -509,8 +511,20 @@ export async function buildDashboard(client, team, iterationId, options = {}) {
   for (const t of revisionsByTask) {
     for (const p of t.points) {
       if (!people.has(p.assignee)) people.set(p.assignee, { name: p.assignee, capacityPerDay: 0, daysOff: [] });
-    }  }
+    }
+  }
 
+  // Remaining Work a task carried at the close of `day` (its last revision on
+  // or before that day), so the day-detail tooltip can show R next to W and B.
+  const pointsByTaskId = new Map(revisionsByTask.map((t) => [t.id, t.points]));
+  function remainingAtEndOf(points, day) {
+    let last = null;
+    for (const p of points || []) {
+      if (dateKey(p.date) > day) break;
+      last = p;
+    }
+    return last ? round(last.remaining) : null;
+  }
   // --- Daily hours per person (completed-work deltas attributed to assignee) ---
   // dailyWorked[dayKey][person] = hours logged that day.
   // dailyBurned[dayKey][person] = remaining-work reduction that day (burndown).
@@ -806,7 +820,12 @@ export async function buildDashboard(client, team, iterationId, options = {}) {
           Object.entries(days).map(([day, items]) => ([
             day,
             Object.values(items)
-              .map((it) => ({ ...it, worked: round(it.worked), burned: round(it.burned) }))
+              .map((it) => ({
+                ...it,
+                worked: round(it.worked),
+                burned: round(it.burned),
+                remaining: remainingAtEndOf(offSprintPointsById.get(it.id), day),
+              }))
               .sort((a, b) => (b.worked + b.burned) - (a.worked + a.burned)),
           ])),
         ),
@@ -821,6 +840,7 @@ export async function buildDashboard(client, team, iterationId, options = {}) {
             day,
             Object.values(items)
               .filter((it) => it.worked > 0 || it.burned > 0)
+              .map((it) => ({ ...it, remaining: remainingAtEndOf(pointsByTaskId.get(it.id), day) }))
               .sort((a, b) => (b.worked + b.burned) - (a.worked + a.burned)),
           ])),
         ),
