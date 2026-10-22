@@ -3,6 +3,7 @@ import { api } from './api.js';
 import ConnectionForm from './components/ConnectionForm.jsx';
 import SprintOverview from './components/SprintOverview.jsx';
 import LoadingScreen from './components/LoadingScreen.jsx';
+import { exportCsv, neutralizeFormula } from './utils/exports.js';
 
 export default function App() {
   const [conn, setConn] = useState(null); // { org, project, teams }
@@ -13,6 +14,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(null);
   const [error, setError] = useState(null);
+  const [exporting, setExporting] = useState(false);
 
   // Restore the browser-session connection (e.g. after a page refresh).
   useEffect(() => {
@@ -72,6 +74,30 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [team, iterationId]);
 
+  // Export every New/Active Feature (and its New/Active children) for the
+  // selected team. The team is captured up front so switching teams mid-export
+  // cannot mislabel the file.
+  async function exportFeatures() {
+    const exportTeam = team;
+    if (!exportTeam) return;
+    setExporting(true);
+    setError(null);
+    try {
+      const { columns, rows } = await api.featureExport(exportTeam);
+      const safeTeam = exportTeam.replace(/[^\w.-]+/g, '_');
+      const stamp = new Date().toISOString().slice(0, 10);
+      exportCsv(
+        `features-${safeTeam}-${stamp}.csv`,
+        [columns, ...rows.map((r) => r.map(neutralizeFormula))],
+        { bom: true },
+      );
+    } catch (err) {
+      setError(`Export failed: ${err.message}`);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   async function disconnect() {
     await api.disconnect();
     setConn(null);
@@ -107,6 +133,13 @@ export default function App() {
           </label>
           <button onClick={load} disabled={loading || !iterationId}>
             {loading ? 'Loading…' : 'Refresh'}
+          </button>
+          <button
+            onClick={exportFeatures}
+            disabled={exporting || !team}
+            title="Download all New/Active Features and their children for this team as CSV"
+          >
+            {exporting ? 'Exporting…' : 'Export CSV'}
           </button>
           <button className="ghost" onClick={disconnect}>Disconnect</button>
         </div>

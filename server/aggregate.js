@@ -21,6 +21,7 @@ const F = {
   stackRank: 'Microsoft.VSTS.Common.StackRank',
   backlogPriority: 'Microsoft.VSTS.Common.BacklogPriority',
   priority: 'Microsoft.VSTS.Common.Priority',
+  areaPath: 'System.AreaPath',
 };
 
 const COMPLETED_STATES = new Set(['done', 'closed', 'completed', 'resolved']);
@@ -995,6 +996,148 @@ export async function buildFeatures(client, team, iterationId) {
     iterationPath,
     iterationFeatures: features.filter((f) => f.inIteration),
     backlogFeatures: features,
+  };
+}
+
+// --- feature + children CSV export ---------------------------------------
+
+const EXPORT_STATES = new Set(['new', 'active']);
+
+// Columns that lead the export; every other field the work items carry follows
+// alphabetically.
+const EXPORT_LEAD_FIELDS = [
+  'System.Id', 'System.WorkItemType', 'System.Title', 'System.State', 'System.Reason',
+  'System.AssignedTo', 'System.AreaPath', 'System.IterationPath',
+];
+const EXPORT_SYNTHETIC = ['Feature ID', 'Feature Title', 'Parent ID', 'Hierarchy Level', 'Work Item URL', 'Rev'];
+
+// Area paths are case-insensitive in ADO.
+function inTeamAreas(areaPath, values) {
+  const p = String(areaPath || '').toLowerCase();
+  if (!p) return false;
+  return values.some((v) => {
+    const base = String(v.value || '').toLowerCase();
+    if (!base) return false;
+    return p === base || (v.includeChildren && p.startsWith(`${base}\\`));
+  });
+}
+
+// Identity fields arrive as objects; everything else is a scalar or, rarely,
+// a structured value that is kept as JSON rather than "[object Object]".
+function flattenFieldValue(v) {
+  if (v == null) return '';
+  if (typeof v === 'object') {
+    if (v.displayName) return v.uniqueName ? `${v.displayName} <${v.uniqueName}>` : v.displayName;
+    return JSON.stringify(v);
+  }
+  return v;
+}
+
+/**
+ * Every New/Active Feature owned by `team`, followed by its New/Active
+ * descendants, with every field ADO returns for them. Items are kept only when
+ * they sit in the team's own area path(s), so work another team owns beneath a
+ * shared Feature is not exported under this team.
+ */
+export async function buildFeatureExport(client, team) {
+  const teamField = await client.getTeamFieldValues(team);
+  const areas = teamField.values || [];
+  if (!areas.length) {
+    // Without an area filter the query would span the whole project.
+    const err = new Error(`Team "${team}" has no area paths configured, so its work items cannot be scoped. Nothing was exported.`);
+    err.status = 422;
+    throw err;
+  }
+
+  const states = "'New', 'Active'";
+  const sourceArea = areaPathClause(teamField, '[Source].[System.AreaPath]');
+  const linkQuery =
+    `SELECT [System.Id] FROM WorkItemLinks WHERE ([Source].[System.WorkItemType] = 'Feature' ` +
+    `AND [Source].[System.State] IN (${states})) AND ${sourceArea} ` +
+    `AND ([System.Links.LinkType] = 'System.LinkTypes.Hierarchy-Forward') MODE (Recursive)`;
+  const linkRes = await client.wiql(linkQuery);
+
+  const childrenOf = new Map();
+  const parentOf = new Map();
+  const ids = new Set();
+  for (const rel of linkRes.workItemRelations || []) {
+    if (rel.target) ids.add(rel.target.id);
+    if (rel.source) ids.add(rel.source.id);
+    if (rel.source && rel.target) {
+      if (!childrenOf.has(rel.source.id)) childrenOf.set(rel.source.id, []);
+      childrenOf.get(rel.source.id).push(rel.target.id);
+      parentOf.set(rel.target.id, rel.source.id);
+    }
+  }
+
+  // No field list: ask ADO for every field each item carries.
+  const items = await client.getWorkItemsBatch(Array.from(ids));
+  const byId = new Map(items.map((w) => [w.id, w]));
+  const fieldsOf = (id) => byId.get(id)?.fields || {};
+  const isFeature = (id) => String(fieldsOf(id)[F.type] || '').toLowerCase() === 'feature';
+  const keep = (id) => {
+    const f = fieldsOf(id);
+    return EXPORT_STATES.has(String(f[F.state] || '').toLowerCase()) && inTeamAreas(f[F.areaPath], areas);
+  };
+  const rankOf = (id) => {
+    const f = fieldsOf(id);
+    const r = f[F.stackRank] != null ? f[F.stackRank] : f[F.backlogPriority];
+    return r == null ? Infinity : num(r);
+  };
+  const byRank = (a, b) => (rankOf(a) - rankOf(b)) || (a - b);
+
+  // A Feature nested under another kept Feature is exported beneath its parent.
+  const hasKeptFeatureAncestor = (id) => {
+    const seen = new Set();
+    for (let p = parentOf.get(id); p != null && !seen.has(p); p = parentOf.get(p)) {
+      seen.add(p);
+      if (isFeature(p) && keep(p)) return true;
+    }
+    return false;
+  };
+  const roots = Array.from(ids)
+    .filter((id) => isFeature(id) && keep(id) && !hasKeptFeatureAncestor(id))
+    .sort((a, b) => (rankOf(a) - rankOf(b)) || String(fieldsOf(a)[F.title] || '').localeCompare(String(fieldsOf(b)[F.title] || '')));
+
+  const orgUrl = `https://dev.azure.com/${client.org}/${encodeURIComponent(client.project)}`;
+  const records = [];
+  const seen = new Set();
+  function walk(id, level, parentId, rootId) {
+    if (seen.has(id)) return;
+    seen.add(id);
+    if (keep(id)) {
+      const w = byId.get(id);
+      const values = {
+        'Feature ID': rootId,
+        'Feature Title': fieldsOf(rootId)[F.title] || '',
+        'Parent ID': parentId ?? '',
+        'Hierarchy Level': level,
+        'Work Item URL': `${orgUrl}/_workitems/edit/${id}`,
+        Rev: w.rev ?? '',
+      };
+      for (const [k, v] of Object.entries(w.fields || {})) values[k] = flattenFieldValue(v);
+      records.push(values);
+    }
+    // Descend through items that were filtered out too: a New task can sit
+    // under a Closed story.
+    for (const child of (childrenOf.get(id) || []).slice().sort(byRank)) walk(child, level + 1, id, rootId);
+  }
+  for (const root of roots) walk(root, 0, null, root);
+
+  const fieldNames = new Set();
+  for (const r of records) for (const k of Object.keys(r)) if (!EXPORT_SYNTHETIC.includes(k)) fieldNames.add(k);
+  const leadPresent = EXPORT_LEAD_FIELDS.filter((k) => fieldNames.has(k));
+  const rest = Array.from(fieldNames).filter((k) => !leadPresent.includes(k)).sort((a, b) => a.localeCompare(b));
+  const columns = [...EXPORT_SYNTHETIC, ...leadPresent, ...rest];
+
+  return {
+    team,
+    states: ['New', 'Active'],
+    columns,
+    rows: records.map((r) => columns.map((c) => (r[c] === undefined ? '' : r[c]))),
+    featureCount: roots.length,
+    count: records.length,
+    generatedAt: new Date().toISOString(),
   };
 }
 

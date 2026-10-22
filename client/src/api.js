@@ -382,4 +382,5 @@ export const api = {
   },
   features: (team, iterationId) =>
     call('GET', `/api/features?team=${encodeURIComponent(team)}${iterationId ? `&iterationId=${encodeURIComponent(iterationId)}` : ''}`),
+  featureExport: (team) => call('GET', `/api/export/features?team=${encodeURIComponent(team)}`),
 };
