@@ -1,5 +1,5 @@
 import { clientFromHeaders } from './server/adoClient.js';
-import { buildDashboard, buildFeatures } from './server/aggregate.js';
+import { buildDashboard, buildFeatures, buildFeatureExport } from './server/aggregate.js';
 
 // CORS is closed by default. The client is served from the same Worker origin,
 // so cross-origin access is unnecessary. Set an ALLOWED_ORIGINS var (comma
@@ -91,6 +91,12 @@ async function handleApi(request, url) {
     const iterationId = url.searchParams.get('iterationId');
     if (!team) return json({ error: 'team is required' }, 400);
     return json(await buildFeatures(clientFor(request), team, iterationId || null));
+  }
+
+  if (method === 'GET' && path === '/api/export/features') {
+    const team = url.searchParams.get('team');
+    if (!team) return json({ error: 'team is required' }, 400);
+    return json(await buildFeatureExport(clientFor(request), team));
   }
 
   return json({ error: 'Not found' }, 404);

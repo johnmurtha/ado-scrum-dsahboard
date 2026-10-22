@@ -39,6 +39,32 @@ Impeded tasks with a missing or unparseable change date are
 counted as impeded but never as stale. A person whose only footprint in the sprint is a blocked
 task still gets a card, so their impediment cannot hide.
 
+## Feature export (CSV)
+
+The **Export Snapshot** button in the top bar downloads every Feature in state **New** or **Active**
+for the selected team, followed by its **New/Active** child work items at any depth (stories,
+tasks, and so on). It does not depend on the selected iteration.
+
+- **Team scoping:** only items inside the team's own area path(s) are exported, honoring each
+  area's "include sub-areas" setting. Work another team owns beneath a shared Feature is left
+  out. If the team has no area path configured the export is refused instead of spanning the
+  whole project.
+- **Columns** (same layout as an ADO "tree of work items" export): `ID`, `Work Item Type`,
+  `Title 1`, `Title 2`, `Title 3`, `Assigned To`, `State`, `Story Points`, `Original Estimate`,
+  `Remaining Work`, `Completed Work`, `Iteration Path`, `Created Date`, `Tags`. Each item's title
+  goes in the Title column for its depth (Feature = Title 1, its children = Title 2, and so on)
+  so the file reads as an indented outline. A hierarchy deeper than three levels adds
+  `Title 4`, `Title 5`, ... rather than dropping titles. If a New/Active item's parent was
+  filtered out (for example a New task under a Closed story), it indents under its nearest
+  exported ancestor. Rows are in backlog-rank order, each Feature followed by its descendants.
+- **Formats:** `Created Date` is `M/D/YYYY H:mm` in your browser's local time; `Assigned To` is
+  `Name <email>`; `Tags` keep ADO's `A; B` form. The file is UTF-8 with a BOM and CRLF line
+  endings so Excel opens it correctly.
+- **Spreadsheet safety:** text cells beginning with `=`, `+`, `-` or `@` get a leading apostrophe
+  so a work item title cannot run as a formula when the file is opened in Excel.
+- The state filter is literally `New` / `Active`, so other process templates' states (for
+  example Scrum's `Approved`/`Committed`) are not included.
+
 ## How hours are derived
 
 Azure DevOps' native fields (`Completed Work` / `Remaining Work`) only store each Task's current

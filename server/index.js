@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 
 import { clientFromHeaders } from './adoClient.js';
-import { buildDashboard, buildFeatures } from './aggregate.js';
+import { buildDashboard, buildFeatures, buildFeatureExport } from './aggregate.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
@@ -90,6 +90,12 @@ app.get('/api/features', wrap(async (req, res) => {
   const { team, iterationId } = req.query;
   if (!team) return res.status(400).json({ error: 'team is required' });
   res.json(await buildFeatures(clientFor(req), team, iterationId || null));
+}));
+
+app.get('/api/export/features', wrap(async (req, res) => {
+  const { team } = req.query;
+  if (!team) return res.status(400).json({ error: 'team is required' });
+  res.json(await buildFeatureExport(clientFor(req), team));
 }));
 
 // --- static (production build) ------------------------------------------
