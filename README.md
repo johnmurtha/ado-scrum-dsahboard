@@ -41,7 +41,7 @@ task still gets a card, so their impediment cannot hide.
 
 ## Feature export (CSV)
 
-The **Export CSV** button in the top bar downloads every Feature in state **New** or **Active**
+The **Export Snapshot** button in the top bar downloads every Feature in state **New** or **Active**
 for the selected team, followed by its **New/Active** child work items at any depth (stories,
 tasks, and so on). It does not depend on the selected iteration.
 

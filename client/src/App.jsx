@@ -140,7 +140,7 @@ export default function App() {
             disabled={exporting || !team}
             title="Download all New/Active Features and their children for this team as CSV"
           >
-            {exporting ? 'Exporting…' : 'Export CSV'}
+            {exporting ? 'Exporting…' : 'Export Snapshot'}
           </button>
           <button className="ghost" onClick={disconnect}>Disconnect</button>
         </div>
