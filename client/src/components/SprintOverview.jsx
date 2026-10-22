@@ -173,10 +173,7 @@ export default function SprintOverview({ dashboard }) {
         return { name: p.name, metrics, series };
       })
       .filter(Boolean)
-      .sort((a, b) => {
-        if (b.metrics.burnedToDate !== a.metrics.burnedToDate) return b.metrics.burnedToDate - a.metrics.burnedToDate;
-        return a.name.localeCompare(b.name);
-      });
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
   }, [dashboard.workingDays, dailyHours?.people, personMetrics, personDayTaskActivity, offSprintDayTaskActivity]);
 
   function exportTeamCsv() {
