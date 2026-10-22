@@ -22,6 +22,9 @@ const F = {
   backlogPriority: 'Microsoft.VSTS.Common.BacklogPriority',
   priority: 'Microsoft.VSTS.Common.Priority',
   areaPath: 'System.AreaPath',
+  originalEstimate: 'Microsoft.VSTS.Scheduling.OriginalEstimate',
+  createdDate: 'System.CreatedDate',
+  tags: 'System.Tags',
 };
 
 const COMPLETED_STATES = new Set(['done', 'closed', 'completed', 'resolved']);
@@ -1003,13 +1006,17 @@ export async function buildFeatures(client, team, iterationId) {
 
 const EXPORT_STATES = new Set(['new', 'active']);
 
-// Columns that lead the export; every other field the work items carry follows
-// alphabetically.
-const EXPORT_LEAD_FIELDS = [
-  'System.Id', 'System.WorkItemType', 'System.Title', 'System.State', 'System.Reason',
-  'System.AssignedTo', 'System.AreaPath', 'System.IterationPath',
+// Export layout mirrors an ADO "tree of work items" CSV: each title sits in the
+// Title column for its depth (Feature = Title 1, its children = Title 2, ...),
+// so the hierarchy reads as an indented outline. There are always at least
+// three title columns; deeper hierarchies add more rather than lose titles.
+const EXPORT_MIN_TITLE_COLUMNS = 3;
+const EXPORT_FIELDS = [
+  F.type, F.title, F.assignedTo, F.state, F.storyPoints, F.originalEstimate, F.remaining,
+  F.completed, F.iterationPath, F.createdDate, F.tags,
+  // Used for scoping and ordering only; not exported.
+  F.areaPath, F.stackRank, F.backlogPriority,
 ];
-const EXPORT_SYNTHETIC = ['Feature ID', 'Feature Title', 'Parent ID', 'Hierarchy Level', 'Work Item URL', 'Rev'];
 
 // Area paths are case-insensitive in ADO.
 function inTeamAreas(areaPath, values) {
@@ -1022,8 +1029,7 @@ function inTeamAreas(areaPath, values) {
   });
 }
 
-// Identity fields arrive as objects; everything else is a scalar or, rarely,
-// a structured value that is kept as JSON rather than "[object Object]".
+// Identity fields arrive as objects; scalars pass through unchanged.
 function flattenFieldValue(v) {
   if (v == null) return '';
   if (typeof v === 'object') {
@@ -1035,9 +1041,9 @@ function flattenFieldValue(v) {
 
 /**
  * Every New/Active Feature owned by `team`, followed by its New/Active
- * descendants, with every field ADO returns for them. Items are kept only when
- * they sit in the team's own area path(s), so work another team owns beneath a
- * shared Feature is not exported under this team.
+ * descendants. Items are kept only when they sit in the team's own area
+ * path(s), so work another team owns beneath a shared Feature is not exported
+ * under this team.
  */
 export async function buildFeatureExport(client, team) {
   const teamField = await client.getTeamFieldValues(team);
@@ -1070,8 +1076,7 @@ export async function buildFeatureExport(client, team) {
     }
   }
 
-  // No field list: ask ADO for every field each item carries.
-  const items = await client.getWorkItemsBatch(Array.from(ids));
+  const items = await client.getWorkItemsBatch(Array.from(ids), EXPORT_FIELDS);
   const byId = new Map(items.map((w) => [w.id, w]));
   const fieldsOf = (id) => byId.get(id)?.fields || {};
   const isFeature = (id) => String(fieldsOf(id)[F.type] || '').toLowerCase() === 'feature';
@@ -1099,44 +1104,59 @@ export async function buildFeatureExport(client, team) {
     .filter((id) => isFeature(id) && keep(id) && !hasKeptFeatureAncestor(id))
     .sort((a, b) => (rankOf(a) - rankOf(b)) || String(fieldsOf(a)[F.title] || '').localeCompare(String(fieldsOf(b)[F.title] || '')));
 
-  const orgUrl = `https://dev.azure.com/${client.org}/${encodeURIComponent(client.project)}`;
   const records = [];
   const seen = new Set();
-  function walk(id, level, parentId, rootId) {
+  let maxDepth = 0;
+  // `depth` counts exported ancestors, so an item whose parent was filtered
+  // out (a New task under a Closed story) still indents one step under its
+  // nearest exported ancestor with no empty gap in the title columns.
+  function walk(id, depth) {
     if (seen.has(id)) return;
     seen.add(id);
+    let childDepth = depth;
     if (keep(id)) {
-      const w = byId.get(id);
-      const values = {
-        'Feature ID': rootId,
-        'Feature Title': fieldsOf(rootId)[F.title] || '',
-        'Parent ID': parentId ?? '',
-        'Hierarchy Level': level,
-        'Work Item URL': `${orgUrl}/_workitems/edit/${id}`,
-        Rev: w.rev ?? '',
-      };
-      for (const [k, v] of Object.entries(w.fields || {})) values[k] = flattenFieldValue(v);
-      records.push(values);
+      const f = fieldsOf(id);
+      const level = depth + 1;
+      maxDepth = Math.max(maxDepth, level);
+      records.push({ id, level, f });
+      childDepth = level;
     }
-    // Descend through items that were filtered out too: a New task can sit
-    // under a Closed story.
-    for (const child of (childrenOf.get(id) || []).slice().sort(byRank)) walk(child, level + 1, id, rootId);
+    // Descend through filtered-out items too: their children may still qualify.
+    for (const child of (childrenOf.get(id) || []).slice().sort(byRank)) walk(child, childDepth);
   }
-  for (const root of roots) walk(root, 0, null, root);
+  for (const root of roots) walk(root, 0);
 
-  const fieldNames = new Set();
-  for (const r of records) for (const k of Object.keys(r)) if (!EXPORT_SYNTHETIC.includes(k)) fieldNames.add(k);
-  const leadPresent = EXPORT_LEAD_FIELDS.filter((k) => fieldNames.has(k));
-  const rest = Array.from(fieldNames).filter((k) => !leadPresent.includes(k)).sort((a, b) => a.localeCompare(b));
-  const columns = [...EXPORT_SYNTHETIC, ...leadPresent, ...rest];
+  const titleColumns = Math.max(EXPORT_MIN_TITLE_COLUMNS, maxDepth);
+  const columns = [
+    'ID', 'Work Item Type',
+    ...Array.from({ length: titleColumns }, (_, i) => `Title ${i + 1}`),
+    'Assigned To', 'State', 'Story Points', 'Original Estimate', 'Remaining Work',
+    'Completed Work', 'Iteration Path', 'Created Date', 'Tags',
+  ];
+  const rows = records.map(({ id, level, f }) => [
+    id,
+    f[F.type] || '',
+    ...Array.from({ length: titleColumns }, (_, i) => (i + 1 === level ? (f[F.title] || '') : '')),
+    flattenFieldValue(f[F.assignedTo]),
+    f[F.state] || '',
+    f[F.storyPoints] ?? '',
+    f[F.originalEstimate] ?? '',
+    f[F.remaining] ?? '',
+    f[F.completed] ?? '',
+    f[F.iterationPath] || '',
+    f[F.createdDate] || '',
+    f[F.tags] || '',
+  ]);
 
   return {
     team,
     states: ['New', 'Active'],
     columns,
-    rows: records.map((r) => columns.map((c) => (r[c] === undefined ? '' : r[c]))),
+    // Columns holding ISO timestamps that the client renders in local time.
+    dateColumns: ['Created Date'],
+    rows,
     featureCount: roots.length,
-    count: records.length,
+    count: rows.length,
     generatedAt: new Date().toISOString(),
   };
 }

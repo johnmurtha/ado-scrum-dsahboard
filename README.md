@@ -49,10 +49,17 @@ tasks, and so on). It does not depend on the selected iteration.
   area's "include sub-areas" setting. Work another team owns beneath a shared Feature is left
   out. If the team has no area path configured the export is refused instead of spanning the
   whole project.
-- **Columns:** `Feature ID`, `Feature Title`, `Parent ID`, `Hierarchy Level` (0 = the Feature),
-  `Work Item URL` and `Rev`, then every field ADO returns for the exported items (headers are
-  field reference names such as `System.Title`). A field appears if at least one exported item
-  has a value for it. People are written as `Name <email>`.
+- **Columns** (same layout as an ADO "tree of work items" export): `ID`, `Work Item Type`,
+  `Title 1`, `Title 2`, `Title 3`, `Assigned To`, `State`, `Story Points`, `Original Estimate`,
+  `Remaining Work`, `Completed Work`, `Iteration Path`, `Created Date`, `Tags`. Each item's title
+  goes in the Title column for its depth (Feature = Title 1, its children = Title 2, and so on)
+  so the file reads as an indented outline. A hierarchy deeper than three levels adds
+  `Title 4`, `Title 5`, ... rather than dropping titles. If a New/Active item's parent was
+  filtered out (for example a New task under a Closed story), it indents under its nearest
+  exported ancestor. Rows are in backlog-rank order, each Feature followed by its descendants.
+- **Formats:** `Created Date` is `M/D/YYYY H:mm` in your browser's local time; `Assigned To` is
+  `Name <email>`; `Tags` keep ADO's `A; B` form. The file is UTF-8 with a BOM and CRLF line
+  endings so Excel opens it correctly.
 - **Spreadsheet safety:** text cells beginning with `=`, `+`, `-` or `@` get a leading apostrophe
   so a work item title cannot run as a formula when the file is opened in Excel.
 - The state filter is literally `New` / `Active`, so other process templates' states (for

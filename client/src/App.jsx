@@ -3,7 +3,7 @@ import { api } from './api.js';
 import ConnectionForm from './components/ConnectionForm.jsx';
 import SprintOverview from './components/SprintOverview.jsx';
 import LoadingScreen from './components/LoadingScreen.jsx';
-import { exportCsv, neutralizeFormula } from './utils/exports.js';
+import { exportCsv, neutralizeFormula, formatLocalDateTime } from './utils/exports.js';
 
 export default function App() {
   const [conn, setConn] = useState(null); // { org, project, teams }
@@ -83,12 +83,13 @@ export default function App() {
     setExporting(true);
     setError(null);
     try {
-      const { columns, rows } = await api.featureExport(exportTeam);
+      const { columns, rows, dateColumns = [] } = await api.featureExport(exportTeam);
+      const dateIdx = new Set(dateColumns.map((c) => columns.indexOf(c)).filter((i) => i >= 0));
       const safeTeam = exportTeam.replace(/[^\w.-]+/g, '_');
       const stamp = new Date().toISOString().slice(0, 10);
       exportCsv(
         `features-${safeTeam}-${stamp}.csv`,
-        [columns, ...rows.map((r) => r.map(neutralizeFormula))],
+        [columns, ...rows.map((r) => r.map((v, i) => neutralizeFormula(dateIdx.has(i) ? formatLocalDateTime(v) : v)))],
         { bom: true },
       );
     } catch (err) {
