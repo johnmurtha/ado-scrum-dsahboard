@@ -193,6 +193,18 @@ thead .sticky-col { background: #fff; }
 .person-mini-metrics strong {
   font-size: 13px;
 }
+/* An impediment nobody has touched for days is the point of the metric --
+   make a non-zero count obvious rather than another grey number. */
+.person-mini-metrics div.stale-impediment {
+  border-color: #f59e0b;
+  background: #fffbeb;
+}
+.person-mini-metrics div.stale-impediment span.muted {
+  color: #92400e;
+}
+.person-mini-metrics div.stale-impediment strong {
+  color: #b45309;
+}
 .person-chart {
   border-top: 1px solid var(--border);
   padding-top: 8px;

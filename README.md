@@ -25,6 +25,20 @@ state between requests, so concurrent users never share credentials or data.
 Impeded hours are derived from the sprint Taskboard API by finding tasks currently in the
 `Impeded` column and summing their current `Remaining Work` by assignee.
 
+### Stale impediments
+
+Each person's sprint card also shows a **Stale** count: the number of their impeded tasks
+whose work item has not been updated (`System.ChangedDate`) for **more than 1 business day**.
+The threshold is overridable per request with the `staleImpedimentDays` option on
+`buildDashboard`. Hovering the tile lists the offending task ids, titles, and age.
+
+Weekends (per the team's working days) and team days off don't count toward the age, so a task
+updated Friday is not stale on Monday (same elapsed business time), but is by Tuesday. Age is measured as elapsed
+time rather than calendar-day bucketing, so a task edited an hour ago never reads as a day old.
+Impeded tasks with a missing or unparseable change date are
+counted as impeded but never as stale. A person whose only footprint in the sprint is a blocked
+task still gets a card, so their impediment cannot hide.
+
 ## How hours are derived
 
 Azure DevOps' native fields (`Completed Work` / `Remaining Work`) only store each Task's current
