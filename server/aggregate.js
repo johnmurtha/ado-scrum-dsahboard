@@ -28,9 +28,25 @@ const REMOVED_STATES = new Set(['removed', 'cut']);
 const STORY_TYPES = new Set(['user story', 'product backlog item', 'requirement']);
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-// An impeded task counts as stale once it has gone this many whole days
-// without any edit to the work item.
+// An impeded task counts as stale once it has gone MORE than this many
+// business days without any edit to the work item.
 const DEFAULT_STALE_IMPEDIMENT_DAYS = 2;
+
+// Elapsed time between two instants, in business days (fractional), skipping
+// any UTC calendar day for which isWorkingDay(key) is false (weekends, team
+// days off). Elapsed-time based so an edit an hour ago never reads as a day old.
+function businessDaysBetween(fromMs, toMs, isWorkingDay) {
+  if (!(toMs > fromMs)) return 0;
+  let total = 0;
+  let cursor = Math.floor(fromMs / DAY_MS) * DAY_MS;
+  while (cursor < toMs) {
+    const next = cursor + DAY_MS;
+    const overlap = Math.min(next, toMs) - Math.max(cursor, fromMs);
+    if (overlap > 0 && isWorkingDay(new Date(cursor).toISOString().slice(0, 10))) total += overlap;
+    cursor = next;
+  }
+  return total / DAY_MS;
+}
 
 // --- helpers -------------------------------------------------------------
 
@@ -286,10 +302,9 @@ export async function buildDashboard(client, team, iterationId, options = {}) {
       .filter((id) => id && taskIdSet.has(id)),
   );
   // Impeded tasks, plus the ones that have gone stale. A task counts as stale
-  // when nobody has touched the work item for `staleImpedimentDays` whole days
-  // -- an impediment nobody is updating is the one most likely to be forgotten.
-  // Staleness uses elapsed time rather than calendar-day bucketing so a task
-  // edited an hour ago never reads as a day old.
+  // when nobody has touched the work item for MORE than `staleImpedimentDays`
+  // business days (weekends and team days off don't count) -- an impediment
+  // nobody is updating is the one most likely to be forgotten.
   const impededHoursByPerson = {};
   const impededCountByPerson = {};
   const staleImpededByPerson = {};
@@ -306,8 +321,9 @@ export async function buildDashboard(client, team, iterationId, options = {}) {
     const changedRaw = f[F.changedDate];
     const changedMs = changedRaw ? new Date(changedRaw).getTime() : NaN;
     if (!Number.isFinite(changedMs)) continue;
-    const daysSinceUpdate = Math.floor((nowMs - changedMs) / DAY_MS);
-    if (daysSinceUpdate < staleImpedimentDays) continue;
+    const businessDays = businessDaysBetween(changedMs, nowMs, isWorking);
+    if (!(businessDays > staleImpedimentDays)) continue;
+    const daysSinceUpdate = round(businessDays);
     staleImpededByPerson[assignee] = (staleImpededByPerson[assignee] || 0) + 1;
     (staleImpededTasksByPerson[assignee] ||= []).push({
       id: t.id,

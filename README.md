@@ -27,13 +27,15 @@ Impeded hours are derived from the sprint Taskboard API by finding tasks current
 
 ### Stale impediments
 
-Each person's sprint card also shows a **Stale ≥Nd** count: the number of their impeded tasks
-whose work item has not been updated (`System.ChangedDate`) for at least N whole days. The
-default threshold is **2 days**, overridable per request with the `staleImpedimentDays`
-option on `buildDashboard`. Hovering the tile lists the offending task ids, titles, and age.
+Each person's sprint card also shows a **Stale** count: the number of their impeded tasks
+whose work item has not been updated (`System.ChangedDate`) for **more than 2 business days**.
+The threshold is overridable per request with the `staleImpedimentDays` option on
+`buildDashboard`. Hovering the tile lists the offending task ids, titles, and age.
 
-Staleness is measured as elapsed time rather than calendar-day bucketing, so a task edited an
-hour ago never reads as a day old. Impeded tasks with a missing or unparseable change date are
+Weekends (per the team's working days) and team days off don't count toward the age, so a task
+updated Friday is not stale on Monday or Tuesday, but is on Wednesday. Age is measured as elapsed
+time rather than calendar-day bucketing, so a task edited an hour ago never reads as a day old.
+Impeded tasks with a missing or unparseable change date are
 counted as impeded but never as stale. A person whose only footprint in the sprint is a blocked
 task still gets a card, so their impediment cannot hide.
 

@@ -41,10 +41,10 @@ function PersonSprintCard({ person, staleDays }) {
   const staleCount = person.metrics.staleImpededCount || 0;
   const staleTasks = person.metrics.staleImpededTasks || [];
   const staleTitle = staleCount
-    ? `Impeded tasks with no update in ${staleDays}+ days:\n${staleTasks
-      .map((t) => `#${t.id} ${t.title} — ${t.daysSinceUpdate}d since update`)
+    ? `Impeded tasks with no update in more than ${staleDays} business days:\n${staleTasks
+      .map((t) => `#${t.id} ${t.title} — ${t.daysSinceUpdate} business days since update`)
       .join('\n')}`
-    : `No impeded tasks have gone ${staleDays}+ days without an update.`;
+    : `No impeded tasks have gone more than ${staleDays} business days without an update.`;
 
   return (
     <div className="person-card">
@@ -59,7 +59,7 @@ function PersonSprintCard({ person, staleDays }) {
         <div><span className="muted">Burned</span><strong>{fmt(person.metrics.burnedToDate)}h</strong></div>
         <div><span className="muted">Impeded</span><strong>{fmt(person.metrics.impededToday)}h</strong></div>
         <div className={staleCount > 0 ? 'stale-impediment' : ''} title={staleTitle}>
-          <span className="muted">Stale ≥{staleDays}d</span>
+          <span className="muted">Stale &gt;{staleDays} bus. days</span>
           <strong>{staleCount}</strong>
         </div>
         <div><span className="muted">Remaining</span><strong>{person.metrics.remainingToday == null ? '—' : `${fmt(person.metrics.remainingToday)}h`}</strong></div>
