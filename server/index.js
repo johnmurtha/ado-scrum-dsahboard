@@ -6,6 +6,7 @@ import fs from 'node:fs';
 
 import { clientFromHeaders } from './adoClient.js';
 import { buildDashboard, buildFeatures, buildFeatureExport } from './aggregate.js';
+import { SECURITY_HEADERS } from './securityHeaders.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3001;
@@ -27,6 +28,11 @@ if (allowedOrigins.length) {
     allowedHeaders: ['Content-Type', 'X-ADO-Org', 'X-ADO-Project', 'X-ADO-PAT'],
   }));
 }
+
+app.use((req, res, next) => {
+  res.set(SECURITY_HEADERS);
+  next();
+});
 
 app.use(express.json());
 
