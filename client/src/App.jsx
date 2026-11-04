@@ -16,17 +16,6 @@ export default function App() {
   const [error, setError] = useState(null);
   const [exporting, setExporting] = useState(false);
 
-  // Restore the browser-session connection (e.g. after a page refresh).
-  useEffect(() => {
-    const saved = api.credentials();
-    if (!saved?.org) return;
-    api.teams()
-      .then(({ teams }) => {
-        if (teams?.length) setConn({ org: saved.org, project: saved.project, teams });
-      })
-      .catch(() => api.clearCredentials());
-  }, []);
-
   async function onReady(res, teamName) {
     setConn(res);
     if (teamName) selectTeam(teamName);

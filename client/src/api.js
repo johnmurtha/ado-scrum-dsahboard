@@ -1,38 +1,21 @@
 // Tiny fetch wrapper for the API.
 //
-// Credentials are held per-browser-session and sent as headers on every
-// request. The server keeps no connection state, so one user's PAT can never
-// leak into another user's request.
-const CREDS_KEY = 'ado-dashboard-creds';
+// Credentials are held in memory only and sent as headers on every request.
+// They are never written to sessionStorage/localStorage, so a page refresh
+// discards the PAT. The server keeps no connection state, so one user's PAT
+// can never leak into another user's request.
 let creds = null;
 
 function loadCreds() {
-  if (creds) return creds;
-  try {
-    const raw = sessionStorage.getItem(CREDS_KEY);
-    if (raw) creds = JSON.parse(raw);
-  } catch {
-    /* sessionStorage unavailable */
-  }
   return creds;
 }
 
 function setCredentials(next) {
   creds = next;
-  try {
-    sessionStorage.setItem(CREDS_KEY, JSON.stringify(next));
-  } catch {
-    /* sessionStorage unavailable; keep in memory only */
-  }
 }
 
 function clearCredentials() {
   creds = null;
-  try {
-    sessionStorage.removeItem(CREDS_KEY);
-  } catch {
-    /* sessionStorage unavailable */
-  }
 }
 
 function authHeaders() {
