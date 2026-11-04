@@ -104,6 +104,11 @@ proxy), so no cross-origin access is required. To allow another origin, set a
 comma-separated `ALLOWED_ORIGINS` (an env var for the Express server, a Worker var for
 Cloudflare).
 
+**Security headers.** Both the Express server and the Worker send a strict same-origin
+`Content-Security-Policy` (plus `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`),
+defined in `server/securityHeaders.js`. Injected script cannot run inline or send the PAT to
+another origin. If you add third-party scripts, fonts, or APIs, extend the policy there.
+
 > **Note:** these headers authenticate to *Azure DevOps*, not to this app. A publicly
 > reachable deployment is still an open proxy that anyone can point at their own ADO org.
 > Put an access control layer (for example Cloudflare Access) in front of a public

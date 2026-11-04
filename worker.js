@@ -1,5 +1,12 @@
 import { clientFromHeaders } from './server/adoClient.js';
 import { buildDashboard, buildFeatures, buildFeatureExport } from './server/aggregate.js';
+import { SECURITY_HEADERS } from './server/securityHeaders.js';
+
+function withSecurityHeaders(res) {
+  const headers = new Headers(res.headers);
+  for (const [k, v] of Object.entries(SECURITY_HEADERS)) headers.set(k, v);
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
 
 // CORS is closed by default. The client is served from the same Worker origin,
 // so cross-origin access is unnecessary. Set an ALLOWED_ORIGINS var (comma
@@ -102,26 +109,30 @@ async function handleApi(request, url) {
   return json({ error: 'Not found' }, 404);
 }
 
+async function handle(request, env) {
+  const url = new URL(request.url);
+  const cors = corsHeaders(request, env);
+  try {
+    if (url.pathname.startsWith('/api/')) {
+      if (request.method.toUpperCase() === 'OPTIONS') {
+        return new Response(null, { status: 204, headers: cors });
+      }
+      const res = await handleApi(request, url);
+      if (Object.keys(cors).length) {
+        const merged = new Headers(res.headers);
+        for (const [k, v] of Object.entries(cors)) merged.set(k, v);
+        return new Response(res.body, { status: res.status, headers: merged });
+      }
+      return res;
+    }
+    return env.ASSETS.fetch(request);
+  } catch (err) {
+    return errorResponse(err, cors);
+  }
+}
+
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url);
-    const cors = corsHeaders(request, env);
-    try {
-      if (url.pathname.startsWith('/api/')) {
-        if (request.method.toUpperCase() === 'OPTIONS') {
-          return new Response(null, { status: 204, headers: cors });
-        }
-        const res = await handleApi(request, url);
-        if (Object.keys(cors).length) {
-          const merged = new Headers(res.headers);
-          for (const [k, v] of Object.entries(cors)) merged.set(k, v);
-          return new Response(res.body, { status: res.status, headers: merged });
-        }
-        return res;
-      }
-      return env.ASSETS.fetch(request);
-    } catch (err) {
-      return errorResponse(err, cors);
-    }
+    return withSecurityHeaders(await handle(request, env));
   },
 };
