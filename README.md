@@ -1,8 +1,9 @@
 # ADO Sprint Analytics Dashboard
 
 A dashboard for two Agile teams that manage work in Azure DevOps. You supply an ADO
-**Personal Access Token (PAT)** in the UI; it is held in your browser's `sessionStorage`
-for the tab's session and sent with each API request. The server stores **no** connection
+**Personal Access Token (PAT)** in the UI; it is held in browser memory only (never written
+to `sessionStorage`/`localStorage`), so refreshing the page discards it and you must
+reconnect. It is sent with each API request. The server stores **no** connection
 state between requests, so concurrent users never share credentials or data.
 
 ## What it shows
